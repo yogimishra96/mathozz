@@ -144,27 +144,92 @@ To generate proper icons (192px & 512px), use:
 
 ## 🎮 Feature List
 
-| Feature | Status |
-|---|---|
-| 4 math categories | ✅ |
-| 3 difficulty levels (Easy/Medium/Hard) | ✅ |
-| Auto-validate on keystroke | ✅ |
-| Shake animation on wrong answer | ✅ |
-| Streak tracking + fire effect | ✅ |
-| XP + 8 Level system | ✅ |
-| Daily goal (20 questions) | ✅ |
-| Firebase Auth (Email + Guest) | ✅ |
-| Firestore persistence | ✅ |
-| Global Leaderboard | ✅ |
-| Category breakdown stats | ✅ |
-| 28-day activity heatmap | ✅ |
-| Level-up modal + confetti | ✅ |
-| Streak bonus XP | ✅ |
-| Skip button | ✅ |
-| PWA (installable) | ✅ |
-| Offline support via SW | ✅ |
-| Haptic feedback | ✅ |
-| Share button | ✅ |
+
+---
+
+## 🧩 Detailed Features & Recommendations
+
+### Implemented Features
+
+1. **Mental Math Practice**
+  - Four categories: Shopping (Addition), Discounts (Percentage), Splitting (Division), Change (Subtraction)
+  - Three difficulty levels: Easy, Medium, Hard
+  - Auto-validate answers on keystroke
+  - Shake animation for wrong answers
+  - Skip button for questions
+
+2. **Gamification & Progress Tracking**
+  - Streak tracking with fire effect for hot streaks
+  - XP system with 8 levels and level-up modal (confetti animation)
+  - Streak bonus XP
+  - Daily goal (default: 20 questions)
+  - Progress bar for daily goal
+  - Category breakdown stats
+  - 28-day activity heatmap
+
+3. **User Accounts & Persistence**
+  - Firebase Authentication (Email/Password and Anonymous/Guest)
+  - Firestore for user stats, leaderboard, and persistence
+  - Global leaderboard (top 10 users by XP)
+  - User profile with avatar, display name, and level
+
+4. **PWA & Offline Support**
+  - Installable as a Progressive Web App (PWA)
+  - Service Worker for offline support (cache-first for assets, network-first for Firebase)
+  - Add to Home Screen support (manifest.json with icons)
+
+5. **UI/UX Enhancements**
+  - Responsive, mobile-first design
+  - Haptic feedback (vibration) for correct/wrong answers
+  - Sound effects toggle
+  - Share button (Web Share API)
+  - Toast notifications and flash feedback
+
+6. **Customization**
+  - Change brand name, daily goal, and colors via code
+  - Difficulty and sound/haptic settings per user
+
+### Recommended Features & Enhancements
+
+1. **Social & Community**
+  - Friend system or direct challenges
+  - Social sharing of scores or streaks
+  - Weekly/monthly leaderboards
+
+2. **Content Expansion**
+  - More math categories (e.g., Multiplication, Fractions, Time/Speed/Distance)
+  - Custom question sets or user-generated questions
+
+3. **Personalization**
+  - Adaptive difficulty based on user performance
+  - Personalized practice recommendations
+
+4. **Notifications**
+  - Push notifications for daily reminders or streaks
+
+5. **Accessibility**
+  - High-contrast mode
+  - Screen reader support
+
+6. **Analytics**
+  - Detailed performance analytics (charts, trends)
+  - Export stats as CSV or image
+
+7. **Monetization (if desired)**
+  - Freemium model (locked features for Pro users)
+  - In-app purchases or subscriptions
+  - White-label for coaching institutes
+
+8. **Security & Privacy**
+  - Enhanced privacy controls for users
+  - GDPR/CCPA compliance options
+
+9. **Internationalization**
+  - Multi-language support
+
+10. **Other**
+   - Dark/light mode toggle
+   - In-app feedback or support chat
 
 ---
 
