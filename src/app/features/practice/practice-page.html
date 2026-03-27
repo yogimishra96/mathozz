@@ -1,0 +1,104 @@
+<header class="g-header">
+  <div class="g-wordmark" tabindex="0" role="button" (click)="goProfile()">
+    {{ i18n.t('brand') }}
+  </div>
+  <div class="g-meta">
+    <div class="xp-chip" aria-live="polite">{{ stats()?.xp ?? 0 }} pts</div>
+    <button
+      type="button"
+      class="avatar"
+      (click)="goProfile()"
+      [attr.aria-label]="i18n.t('profile')"
+    >
+      {{ avatarLetter() }}
+    </button>
+  </div>
+</header>
+
+@if (
+  stats()?.settings?.timedMode &&
+  (stats()?.settings?.timePerQuestionSec ?? 0) > 0
+) {
+  <div class="timer-bar" aria-hidden="true">
+    <div class="timer-fill" [style.width.%]="timerPct()"></div>
+  </div>
+}
+
+<div class="diff-bar" role="tablist" aria-label="Difficulty">
+  @for (d of difficulties; track d) {
+    <button
+      type="button"
+      class="diff-btn"
+      [attr.data-diff]="d"
+      [class.active]="difficulty() === d"
+      [attr.aria-selected]="difficulty() === d"
+      role="tab"
+      (click)="setDifficulty(d)"
+    >
+      {{ d }}
+    </button>
+  }
+</div>
+
+<main
+  class="g-stage"
+  (touchstart)="onStageTouch($event)"
+  aria-live="polite"
+>
+  <div class="cat-tag">{{ categoryLabel() }}</div>
+  <div class="q-area" [class.pop]="qPop()">
+    <div
+      class="q-text"
+      [class.ok]="qState() === 'ok'"
+      [class.ng]="qState() === 'bad'"
+    >
+      {{ questionText() }}
+    </div>
+  </div>
+  @if (currentHint().length > 0) {
+    <div class="hint-row">
+      <button type="button" class="hint-btn" (click)="toggleHint()">
+        {{ hintOpen() ? i18n.t('hideHint') : i18n.t('showHint') }}
+      </button>
+      @if (hintOpen()) {
+        <p class="hint-text">{{ currentHint() }}</p>
+      }
+    </div>
+  }
+  <div class="ans-wrap">
+    <input
+      #ans
+      class="ans-input"
+      [class.ok]="qState() === 'ok'"
+      [class.ng]="qState() === 'bad'"
+      [class.shake]="shakeInput()"
+      type="text"
+      inputmode="numeric"
+      pattern="[0-9]*"
+      autocomplete="off"
+      autocorrect="off"
+      spellcheck="false"
+      [attr.aria-label]="i18n.t('practice') + ' answer'"
+      [value]="answer()"
+      (input)="onAnswerInput($event)"
+      (keydown.enter)="onEnter()"
+    />
+    <div class="ans-foot">
+      <span class="ans-hint">{{ i18n.t('enterHint') }}</span>
+      <button type="button" class="skip-btn" (click)="skip()">
+        {{ i18n.t('skip') }}
+      </button>
+    </div>
+  </div>
+</main>
+
+<div class="practice-foot">
+  <span class="foot-stat">{{ i18n.t('solvedToday') }}: {{ todaySolved() }}</span>
+  @if (
+    (stats()?.reviewQueue?.length ?? 0) > 0 && stats()?.settings?.smartPractice
+  ) {
+    <span class="foot-stat"
+      >{{ i18n.t('reviewQueued') }}: {{ stats()?.reviewQueue?.length ?? 0 }}</span
+    >
+  }
+</div>

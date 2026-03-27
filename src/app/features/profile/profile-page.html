@@ -1,0 +1,312 @@
+<div class="profile-scroll">
+  <div class="p-header">
+    <span class="p-title">{{ i18n.t('profile') }}</span>
+  </div>
+  <div class="p-body">
+    <div class="p-hero">
+      <div class="big-av">{{ avatarLetter() }}</div>
+      <div class="p-name">{{ displayName() }}</div>
+      <div class="p-email">{{ emailLabel() }}</div>
+      <div class="p-pts-chip">
+        {{ stats()?.xp ?? 0 }} {{ i18n.t('lbPoints') }}
+      </div>
+    </div>
+
+    <div class="set-card insights-card">
+      <div class="card-title">{{ i18n.t('insightsTitle') }}</div>
+      <div class="insight-row">
+        <span class="insight-k">{{ i18n.t('totalCorrectInsight') }}</span>
+        <span class="insight-v">{{ stats()?.totalCorrect ?? 0 }}</span>
+      </div>
+      <div class="insight-row">
+        <span class="insight-k">{{ i18n.t('weakest') }}</span>
+        <span class="insight-v weak-list">
+          @for (c of weakest(); track c) {
+            <span>{{ catLabel(c) }} ({{ mastery(c) }}%)</span>
+          } @empty {
+            <span>—</span>
+          }
+        </span>
+      </div>
+      <div class="mini-bars">
+        @for (c of categoryIds; track c) {
+          <div class="mb-row">
+            <span class="mb-lab">{{ catLabel(c) }}</span>
+            <div class="mb-track">
+              <div class="mb-fill" [style.width.%]="mastery(c)"></div>
+            </div>
+            <span class="mb-pct">{{ mastery(c) }}%</span>
+          </div>
+        }
+      </div>
+      <div class="week-strip">
+        <div class="week-title">{{ i18n.t('weekActivity') }}</div>
+        <div class="week-bars">
+          @for (d of weekSolves(); track d.key) {
+            <div class="wb">
+              <div
+                class="wb-s"
+                [style.height.px]="
+                  4 + Math.min(36, (d.count / 8) * 36)
+                "
+              ></div>
+              <span class="wb-x">{{ d.key.slice(5) }}</span>
+            </div>
+          } @empty {
+            <span class="muted">—</span>
+          }
+        </div>
+        <div class="week-title">{{ i18n.t('weekWrongs') }}</div>
+        <div class="week-bars">
+          @for (d of weekWrongs(); track d.key) {
+            <div class="wb">
+              <div
+                class="wb-w"
+                [style.height.px]="
+                  4 + Math.min(36, (d.count / 4) * 36)
+                "
+              ></div>
+              <span class="wb-x">{{ d.key.slice(5) }}</span>
+            </div>
+          } @empty {
+            <span class="muted">—</span>
+          }
+        </div>
+      </div>
+    </div>
+
+    <div class="set-card">
+      <div class="card-title">{{ i18n.t('trainingTitle') }}</div>
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('smartPractice') }}</div>
+          <div class="set-sub">{{ i18n.t('smartPracticeSub') }}</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().smartPractice"
+          (click)="toggle('smartPractice', $event)"
+          [attr.aria-pressed]="settings().smartPractice ? 'true' : 'false'"
+        ></button>
+      </div>
+      <div class="set-row" (click)="cycleFocus()">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('focusSkill') }}</div>
+          <div class="set-sub">{{ i18n.t('focusNone') }}</div>
+        </div>
+        <span class="set-val focus-val">{{ focusLabel() }}</span>
+      </div>
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('timedMode') }}</div>
+          <div class="set-sub">{{ i18n.t('timedModeSub') }}</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().timedMode"
+          (click)="toggle('timedMode', $event)"
+          [attr.aria-pressed]="settings().timedMode ? 'true' : 'false'"
+        ></button>
+      </div>
+      @if (settings().timedMode) {
+        <div class="set-row" (click)="cycleTimerSecs()">
+          <div class="set-left">
+            <div class="set-label">{{ i18n.t('timerSecs') }}</div>
+            <div class="set-sub">Tap to cycle</div>
+          </div>
+          <span class="set-val">{{ settings().timePerQuestionSec }}s</span>
+        </div>
+      }
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('hintDefault') }}</div>
+          <div class="set-sub">Practice screen</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().hintVisibleDefault"
+          (click)="toggle('hintVisibleDefault', $event)"
+          [attr.aria-pressed]="
+            settings().hintVisibleDefault ? 'true' : 'false'
+          "
+        ></button>
+      </div>
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('adaptiveDiff') }}</div>
+          <div class="set-sub">{{ i18n.t('adaptiveDiffSub') }}</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().adaptiveDifficulty"
+          (click)="toggle('adaptiveDifficulty', $event)"
+          [attr.aria-pressed]="
+            settings().adaptiveDifficulty ? 'true' : 'false'
+          "
+        ></button>
+      </div>
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('reduceMotion') }}</div>
+          <div class="set-sub">{{ i18n.t('reduceMotionSub') }}</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().reduceMotion"
+          (click)="toggle('reduceMotion', $event)"
+          [attr.aria-pressed]="settings().reduceMotion ? 'true' : 'false'"
+        ></button>
+      </div>
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('largeText') }}</div>
+          <div class="set-sub">{{ i18n.t('largeTextSub') }}</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().largeText"
+          (click)="toggle('largeText', $event)"
+          [attr.aria-pressed]="settings().largeText ? 'true' : 'false'"
+        ></button>
+      </div>
+    </div>
+
+    <div class="set-card">
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">Sound</div>
+          <div class="set-sub">Answer feedback</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().sound"
+          (click)="toggle('sound', $event)"
+          [attr.aria-pressed]="settings().sound ? 'true' : 'false'"
+        ></button>
+      </div>
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">Haptic</div>
+          <div class="set-sub">Vibration</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().haptic"
+          (click)="toggle('haptic', $event)"
+          [attr.aria-pressed]="settings().haptic ? 'true' : 'false'"
+        ></button>
+      </div>
+      <div class="set-row" (click)="cycleDifficulty()">
+        <div class="set-left">
+          <div class="set-label">Difficulty</div>
+          <div class="set-sub">Default on open</div>
+        </div>
+        <span class="set-val">{{ settings().difficulty }}</span>
+      </div>
+      <div class="set-row">
+        <div class="set-left">
+          <div class="set-label">High contrast</div>
+          <div class="set-sub">Accessibility</div>
+        </div>
+        <button
+          type="button"
+          class="tog"
+          [class.on]="settings().highContrast"
+          (click)="toggle('highContrast', $event)"
+          [attr.aria-pressed]="settings().highContrast ? 'true' : 'false'"
+        ></button>
+      </div>
+      <div class="set-row" (click)="cycleTheme()">
+        <div class="set-left">
+          <div class="set-label">Theme</div>
+          <div class="set-sub">Dark / light</div>
+        </div>
+        <span class="set-val">{{ settings().theme }}</span>
+      </div>
+      <div class="set-row" (click)="cycleLocale()">
+        <div class="set-left">
+          <div class="set-label">Language</div>
+          <div class="set-sub">English / Hindi</div>
+        </div>
+        <span class="set-val">{{ settings().locale }}</span>
+      </div>
+    </div>
+
+    <div class="set-card">
+      <div class="set-row" (click)="exportCsv()">
+        <div class="set-left">
+          <div class="set-label">{{ i18n.t('exportCsv') }}</div>
+          <div class="set-sub">Includes skill breakdown</div>
+        </div>
+        <span class="set-val">›</span>
+      </div>
+      <div class="set-row" (click)="openFeedback()">
+        <div class="set-left">
+          <div class="set-label">Feedback</div>
+          <div class="set-sub">Ideas or bugs</div>
+        </div>
+        <span class="set-val">›</span>
+      </div>
+      <div class="set-row" (click)="openPrivacy()">
+        <div class="set-left">
+          <div class="set-label">Privacy</div>
+          <div class="set-sub">How we use data</div>
+        </div>
+        <span class="set-val">›</span>
+      </div>
+    </div>
+
+    <button type="button" class="btn-danger" (click)="signOut()">
+      Sign out
+    </button>
+  </div>
+</div>
+
+<div
+  class="overlay"
+  [class.open]="feedbackOpen()"
+  (click)="closeFeedback($event)"
+>
+  <div class="sheet" (click)="$event.stopPropagation()">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Feedback</div>
+    <textarea
+      class="fb-area"
+      rows="4"
+      [value]="feedbackText()"
+      (input)="feedbackText.set(ta($event))"
+      placeholder="What should we improve?"
+    ></textarea>
+    <button type="button" class="btn-fill" (click)="sendFeedback()">
+      Send
+    </button>
+  </div>
+</div>
+
+<div
+  class="overlay"
+  [class.open]="privacyOpen()"
+  (click)="closePrivacy($event)"
+>
+  <div class="sheet sheet-tall" (click)="$event.stopPropagation()">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Privacy</div>
+    <p class="legal">
+      Mathozz stores practice stats under your Firebase Auth user id. Leaderboard
+      shows your display name and points. Feedback messages are write-only for
+      you. You can stop using the app and delete data via Firebase support for
+      your project.
+    </p>
+    <button type="button" class="btn-fill" (click)="dismissPrivacy()">
+      Close
+    </button>
+  </div>
+</div>

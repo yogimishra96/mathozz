@@ -1,0 +1,113 @@
+:host {
+  display: block;
+  height: 100dvh;
+}
+
+.boot-screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  background: var(--bg);
+}
+
+.load-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.load-icon {
+  width: 40px;
+  height: 40px;
+  background: var(--accent-soft);
+  border: 1px solid var(--line2);
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.load-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.load-wordmark {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.load-bar-track {
+  width: 80px;
+  height: 1px;
+  background: var(--line2);
+}
+
+.load-bar-fill.indeterminate {
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(90deg, var(--accent), #e4c04a);
+  animation: indet 1s ease-in-out infinite;
+}
+
+@keyframes indet {
+  0% {
+    transform: translateX(-20%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+.flash {
+  position: fixed;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 500;
+  transition: opacity 0.1s;
+}
+
+.flash.g {
+  background: var(--green);
+}
+
+.flash.r {
+  background: var(--red);
+}
+
+.flash.pop {
+  opacity: 0.04;
+}
+
+.toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-50px);
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 12px;
+  color: var(--text);
+  z-index: 600;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    transform 0.28s var(--ease),
+    opacity 0.28s;
+  pointer-events: none;
+}
+
+.toast.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}

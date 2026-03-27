@@ -1,19 +1,39 @@
-// firestore.rules
-// Deploy with: firebase deploy --only firestore:rules
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Users can only read/write their own data
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Leaderboard: anyone authenticated can read, only own entry to write
     match /leaderboard/{userId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll(['uid', 'name', 'xp', 'weeklyXp', 'weekKey'])
+        && request.resource.data.uid == userId
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() < 80
+        && request.resource.data.xp is number
+        && request.resource.data.xp >= 0
+        && request.resource.data.xp < 100000000
+        && request.resource.data.weeklyXp is number
+        && request.resource.data.weeklyXp >= 0
+        && request.resource.data.weeklyXp < 10000000
+        && request.resource.data.weekKey is string
+        && request.resource.data.weekKey.size() > 0
+        && request.resource.data.weekKey.size() < 32;
+      allow delete: if false;
+    }
+
+    match /feedback/{docId} {
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() < 2000;
+      allow read, update, delete: if false;
     }
   }
 }

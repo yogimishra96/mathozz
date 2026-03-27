@@ -1,14 +1,21 @@
 # 🟠 Mathoxx — Setup & Deployment Guide
 
-## What's Included
+## Repository layout
+
 ```
 mathoxx/
-├── index.html        ← Full app (single file, all screens)
-├── manifest.json     ← PWA manifest
-├── sw.js             ← Service worker (offline support)
-├── firestore.rules   ← Firestore security rules
-└── README.md         ← This file
+├── src/                    Angular 21 app source
+├── public/                 Static assets + PWA icons + manifest
+├── firebase.json           Hosting + Firestore paths
+├── firestore.rules
+├── firestore.indexes.json
+├── .firebaserc
+├── angular.json
+├── package.json
+└── README.md               This file
 ```
+
+The legacy single-file `index.html` / `sw.js` / root `manifest.json` stack was removed; the app is **Angular + `@angular/service-worker`** only.
 
 ---
 
@@ -31,66 +38,55 @@ mathoxx/
 
 ### 1.4 Get Config
 1. Project Settings (gear icon) → **General** → Your apps
-2. Click **</>** (Web) → Register app as `mathoxx-web`
+2. Click **</>** (Web) → Register app (e.g. `mathoxx-web`)
 3. Copy the `firebaseConfig` object
 
-### 1.5 Paste Config into index.html
-Find this section in `index.html` and replace:
-```js
-const firebaseConfig = {
-  apiKey:            "YOUR_API_KEY",          // ← replace
-  authDomain:        "YOUR_PROJECT.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID"
-};
-```
+### 1.5 Paste config (Angular)
+Edit **`src/environments/firebase-options.ts`** and replace the `firebaseOptions` fields with your project values.
 
-### 1.6 Deploy Security Rules
+### 1.6 Deploy Security Rules & Indexes
+From the **repository root** (same folder as `firebase.json`):
+
 ```bash
 npm install -g firebase-tools
 firebase login
-firebase init firestore   # select your project
 firebase deploy --only firestore:rules
+firebase deploy --only firestore:indexes
 ```
 
 ---
 
 ## 🚀 Step 2: Deploy (5 minutes)
 
-### Option A — Firebase Hosting (Recommended, Free)
+### Option A — Firebase Hosting (recommended)
+From the **repository root**:
+
 ```bash
-firebase init hosting
-# Public directory: . (current folder)
-# Single-page app: Yes
-# Overwrite index.html: No
+npm run build
 firebase deploy
 ```
+
+Hosting serves **`dist/mathoxx/browser`** (see `firebase.json`).
+
 → Live at `https://YOUR_PROJECT.web.app`
 
-### Option B — Netlify (Drag & Drop)
-1. Go to **https://netlify.com**
-2. Drag the `mathoxx/` folder onto the Netlify dashboard
-3. Done! Custom domain available for free
+### Option B — Netlify / static host
+After `npm run build`, upload the contents of **`dist/mathoxx/browser`** (not the whole monorepo).
 
 ### Option C — Vercel
 ```bash
 npm i -g vercel
 vercel --prod
 ```
+Point the build output to `dist/mathoxx/browser` per your Vercel project settings.
 
 ---
 
-## 📱 Step 3: Make it a PWA (Add to Home Screen)
+## 📱 Step 3: PWA (Add to Home Screen)
 
-Users can install Mathoxx as a native-feeling app:
+Icons and `manifest.webmanifest` live under **`public/`** (copied into the build). Users can install from the deployed URL:
 - **iPhone**: Safari → Share → Add to Home Screen
 - **Android**: Chrome → Menu (⋮) → Add to Home Screen
-
-To generate proper icons (192px & 512px), use:
-- https://realfavicongenerator.net
-- Or Figma/Canva with the Mathoxx logo
 
 ---
 
@@ -143,7 +139,6 @@ To generate proper icons (192px & 512px), use:
 ---
 
 ## 🎮 Feature List
-
 
 ---
 
@@ -233,26 +228,40 @@ To generate proper icons (192px & 512px), use:
 
 ---
 
-## 🛠️ Customisation
+## 🛠️ Customisation (Angular)
 
 ### Change brand name
-Search & replace `Mathoxx` → your brand name in `index.html`
+Search & replace in **`src/`** templates and **`src/index.html`** (`<title>`, visible strings).
 
-### Change daily goal
-```js
-const DAILY_GOAL = 20; // line ~205 in index.html
-```
+### Change default daily goal
+Edit **`src/app/domain/game-constants.ts`** (`DEFAULT_DAILY_GOAL`) and/or user settings defaults in **`src/app/domain/user-stats.factory.ts`**.
 
-### Add new difficulty ranges
-Edit the `genShopping()`, `genDiscount()` etc. functions in the JS section.
+### Add or tune question generators
+Edit **`src/app/domain/question-engine.ts`**.
 
 ### Change colors
-Edit CSS variables at top of `<style>` tag:
-```css
---accent: #FF6B35;   /* main orange */
---green:  #4ADE80;   /* success */
---red:    #F87171;   /* error */
+Edit CSS variables in **`src/styles.scss`** (`:root` and `.theme-light`).
+
+---
+
+## 🧑‍💻 Local development
+
+```bash
+npm install
+npm start
 ```
+
+Open `http://localhost:4200/`.
+
+```bash
+npm test
+```
+
+---
+
+## Empty `mathoxx-web` folder
+
+If you still see an empty **`mathoxx-web/`** directory after pulling changes, it is safe to delete it (some tools lock the folder until closed).
 
 ---
 

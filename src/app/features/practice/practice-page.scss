@@ -1,0 +1,275 @@
+:host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.g-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.g-wordmark {
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+}
+
+.g-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.timer-bar {
+  width: 100%;
+  height: 3px;
+  background: var(--line2);
+  flex-shrink: 0;
+}
+
+.timer-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
+
+.xp-chip {
+  padding: 6px 10px;
+  border-radius: 20px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(201, 162, 39, 0.22);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--text2);
+  cursor: pointer;
+}
+
+.diff-bar {
+  display: flex;
+  gap: 1px;
+  background: var(--line);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  width: 100%;
+}
+
+.diff-btn {
+  flex: 1;
+  padding: 10px 0;
+  background: var(--bg);
+  border: none;
+  color: var(--text3);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.diff-btn.active {
+  background: var(--bg1);
+  color: var(--text);
+}
+
+.diff-btn[data-diff='hard'].active {
+  color: var(--red);
+}
+
+.g-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0 32px;
+}
+
+.cat-tag {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text3);
+  margin-bottom: 28px;
+}
+
+.q-area {
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 40px;
+  width: 100%;
+}
+
+.q-area.pop {
+  animation: qPop 0.3s var(--ease) both;
+}
+
+.q-text {
+  font-family: var(--mono);
+  font-size: clamp(24px, 6vw, 36px);
+  font-style: italic;
+  text-align: center;
+  line-height: 1.35;
+}
+
+.q-text.ok {
+  color: var(--green);
+}
+
+.q-text.ng {
+  color: var(--red);
+}
+
+.hint-row {
+  width: 100%;
+  max-width: 340px;
+  margin-bottom: 20px;
+}
+
+.hint-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0 0 8px;
+}
+
+.hint-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text2);
+  font-weight: 400;
+}
+
+.ans-wrap {
+  width: 100%;
+}
+
+.ans-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line2);
+  outline: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 36px;
+  font-weight: 300;
+  text-align: center;
+  padding: 8px 0 14px;
+  caret-color: var(--accent);
+}
+
+.ans-input.ok {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.ans-input.ng {
+  border-color: var(--red);
+}
+
+.ans-input.shake {
+  animation: shake 0.32s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.ans-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.ans-hint {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--text3);
+  text-transform: uppercase;
+}
+
+.skip-btn {
+  font-size: 11px;
+  color: var(--text2);
+  cursor: pointer;
+  background: none;
+  border: none;
+  font-family: var(--sans);
+}
+
+.practice-foot {
+  width: 100%;
+  padding: 8px 20px 10px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 20px;
+}
+
+.foot-stat {
+  font-size: 11px;
+  color: var(--text3);
+  letter-spacing: 0.04em;
+}
+
+@keyframes qPop {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shake {
+  10%,
+  90% {
+    transform: translateX(-2px);
+  }
+  20%,
+  80% {
+    transform: translateX(4px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-6px);
+  }
+  40%,
+  60% {
+    transform: translateX(6px);
+  }
+}

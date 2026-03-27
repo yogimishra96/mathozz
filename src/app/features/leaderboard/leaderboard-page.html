@@ -1,0 +1,60 @@
+<div class="lb-root">
+  <header class="lb-head">
+    <h1 class="lb-title">{{ i18n.t('leaderboard') }}</h1>
+    <p class="lb-sub">Top 100 · {{ i18n.t('lbAllTime') }} & {{ i18n.t('lbThisWeek') }}</p>
+  </header>
+
+  <div class="lb-tabs" role="tablist">
+    <button
+      type="button"
+      role="tab"
+      class="lb-tab"
+      [attr.aria-selected]="tab() === 'all'"
+      [class.on]="tab() === 'all'"
+      (click)="setTab('all')"
+    >
+      {{ i18n.t('lbAllTime') }}
+    </button>
+    <button
+      type="button"
+      role="tab"
+      class="lb-tab"
+      [attr.aria-selected]="tab() === 'week'"
+      [class.on]="tab() === 'week'"
+      (click)="setTab('week')"
+    >
+      {{ i18n.t('lbThisWeek') }}
+    </button>
+  </div>
+
+  @if (loading()) {
+    <div class="lb-state">…</div>
+  } @else if (loadError()) {
+    <div class="lb-state lb-err">{{ i18n.t('lbLoadError') }}</div>
+  } @else if (visibleRows().length === 0) {
+    <div class="lb-state">{{ i18n.t('lbEmpty') }}</div>
+  } @else {
+    <div class="lb-table-wrap">
+      <div class="lb-row lb-header">
+        <span>{{ i18n.t('lbRank') }}</span>
+        <span>{{ i18n.t('lbPlayer') }}</span>
+        <span class="lb-num">{{ i18n.t('lbPoints') }}</span>
+      </div>
+      @for (r of visibleRows(); track r.uid + ':' + r.rank) {
+        <div
+          class="lb-row"
+          [class.self]="r.uid === selfUid()"
+        >
+          <span class="lb-rank">{{ r.rank }}</span>
+          <span class="lb-name">
+            {{ r.name }}
+            @if (r.uid === selfUid()) {
+              <span class="lb-you">{{ i18n.t('lbYou') }}</span>
+            }
+          </span>
+          <span class="lb-xp">{{ r.xp }}</span>
+        </div>
+      }
+    </div>
+  }
+</div>
