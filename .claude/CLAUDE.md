@@ -1,55 +1,93 @@
 
-You are an expert in TypeScript, Angular, and scalable web application development. You write functional, maintainable, performant, and accessible code following Angular and TypeScript best practices.
+# CLAUDE.md - Mathozz Project Guide
 
-## TypeScript Best Practices
+## Project Snapshot
 
-- Use strict type checking
-- Prefer type inference when the type is obvious
-- Avoid the `any` type; use `unknown` when type is uncertain
+- App name: `mathozz`
+- Stack: Angular `21.x`, TypeScript `5.9`, Firebase JS SDK `12.x`
+- Architecture: standalone Angular app, zoneless change detection, signal-first state
+- Styling: SCSS, mostly inline component styles
+- Backend: Firebase Auth + Firestore via modular SDK (no AngularFire)
 
-## Angular Best Practices
+## Active Runtime Entry Points
 
-- Always use standalone components over NgModules
-- Must NOT set `standalone: true` inside Angular decorators. It's the default in Angular v20+.
-- Use signals for state management
-- Implement lazy loading for feature routes
-- Do NOT use the `@HostBinding` and `@HostListener` decorators. Put host bindings inside the `host` object of the `@Component` or `@Directive` decorator instead
-- Use `NgOptimizedImage` for all static images.
-  - `NgOptimizedImage` does not work for inline base64 images.
+- Bootstrap: `src/main.ts`
+- Root UI: `src/app/app.component.ts` (`AppComponent`)
+- App config + Firebase init: `src/app/app.config.ts`
+- Domain/service logic: `src/app/app.service.ts`
 
-## Accessibility Requirements
+## Important Reality Check
 
-- It MUST pass all AXE checks.
-- It MUST follow all WCAG AA minimums, including focus management, color contrast, and ARIA attributes.
+There are scaffold leftovers in `src/app/app.ts`, `src/app/app.html`, and `src/app/app.scss`.
+Current runtime uses `AppComponent` from `app.component.ts`, not `App` from `app.ts`.
+Do not migrate code into the scaffold files unless explicitly requested.
 
-### Components
+## Required Engineering Standards
 
-- Keep components small and focused on a single responsibility
-- Use `input()` and `output()` functions instead of decorators
-- Use `computed()` for derived state
-- Set `changeDetection: ChangeDetectionStrategy.OnPush` in `@Component` decorator
-- Prefer inline templates for small components
-- Prefer Reactive forms instead of Template-driven ones
-- Do NOT use `ngClass`, use `class` bindings instead
-- Do NOT use `ngStyle`, use `style` bindings instead
-- When using external templates/styles, use paths relative to the component TS file.
+### TypeScript
 
-## State Management
+- Keep strict typing.
+- Prefer inference when obvious.
+- Avoid `any`; use `unknown` when uncertain.
 
-- Use signals for local component state
-- Use `computed()` for derived state
-- Keep state transformations pure and predictable
-- Do NOT use `mutate` on signals, use `update` or `set` instead
+### Angular
 
-## Templates
+- Use standalone components (do not add NgModules).
+- Do not set `standalone: true` explicitly in decorators for Angular v20+.
+- Use signals (`signal`, `computed`) for component and service state.
+- Keep `ChangeDetectionStrategy.OnPush` for components.
+- Use `host` metadata over `@HostBinding` and `@HostListener`.
+- Prefer Angular built-in control flow (`@if`, `@for`, `@switch`) in templates.
 
-- Keep templates simple and avoid complex logic
-- Use native control flow (`@if`, `@for`, `@switch`) instead of `*ngIf`, `*ngFor`, `*ngSwitch`
-- Use the async pipe to handle observables
-- Do not assume globals like (`new Date()`) are available.
+### Accessibility
 
-## Services
+- Maintain WCAG AA minimums.
+- Keep keyboard navigation intact (game already has keyboard-driven interaction).
+- Ensure focus styles remain visible and sufficient color contrast is preserved.
 
-- Design services around a single responsibility
-- Use the `providedIn: 'root'` option for singleton services
-- Use the `inject()` function instead of constructor injection
+## Project-Specific Rules
+
+- Keep using Firebase modular SDK imports from `firebase/*`.
+- Do not introduce AngularFire unless explicitly requested.
+- Preserve zoneless setup (`provideZonelessChangeDetection`) in `app.config.ts`.
+- Keep game/app state centralized in `AppService` unless there is a clear refactor goal.
+- Avoid unnecessary routing/module architecture changes; this app is currently single-root, signal-driven screen state.
+
+## Data + Firebase Notes
+
+- Environment config lives in:
+  - `src/environments/environment.ts`
+  - `src/environments/environment.prod.ts`
+- Firestore config files:
+  - `firestore.rules`
+  - `firestore.indexes.json`
+- Firebase project/deploy config:
+  - `firebase.json`
+  - `.firebaserc`
+
+## Commands
+
+- Install: `npm install`
+- Dev server: `npm start` (runs `ng serve`)
+- Build: `npm run build`
+- Watch build: `npm run watch`
+- Test: `npm test`
+
+## Code Change Guidance
+
+- Prefer minimal, surgical edits over broad rewrites.
+- Keep public behavior stable unless task asks for behavior changes.
+- Match existing naming patterns (`Screen`, `Difficulty`, `LeaderboardScope`, etc.).
+- If editing auth or persistence flows, preserve guest merge behavior and leaderboard updates.
+
+## Testing Guidance
+
+- Run `npm test` for behavioral changes.
+- For UI-heavy changes in `app.component.ts`, verify keyboard interactions and mobile layout.
+- For service changes in `app.service.ts`, verify auth transitions, guest limits, XP/level updates, and Firestore sync paths.
+
+## Output Quality Bar
+
+- Keep code maintainable, readable, and strongly typed.
+- Avoid introducing dead files or parallel implementations.
+- Document non-obvious logic with short, targeted comments only where needed.
