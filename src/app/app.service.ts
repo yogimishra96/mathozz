@@ -1,1055 +1,510 @@
 import { Injectable, signal, computed } from '@angular/core';
 import {
-  signInWithPopup,
   GoogleAuthProvider,
+  onAuthStateChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   createUserWithEmailAndPassword,
   updateProfile,
   signOut,
-  onAuthStateChanged,
-  User as FirebaseUser
+  User,
 } from 'firebase/auth';
-import {
+import { firebaseAuth } from './app.config';
 
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  collection,
-  query,
-  orderBy,
-  limit,
-  where,
-  getDocs,
-  serverTimestamp,
-  Timestamp
-} from 'firebase/firestore';
-import { firebaseAuth, firebaseDb } from './app.config';
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
+export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert';
+export type Screen = 'home' | 'game' | 'result' | 'login' | 'stats' | 'profile';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-export type Screen = 'home' | 'game' | 'result' | 'login' | 'leaderboard' | 'profile';
-export type Operator = '+' | '-' | '×' | '÷';
-export type Difficulty = 'easy' | 'medium' | 'hard';
-export type FeedbackType = 'correct' | 'wrong' | null;
-export type LeaderboardScope = 'global' | 'country' | 'city';
-
-export interface Problem {
-  num1: number;
-  num2: number;
-  operator: Operator;
+export interface MathProblem {
+  text: string;
   answer: number;
-  displayQuestion: string;
 }
 
-export interface UserData {
+export interface AppUser {
   uid: string;
-  displayName: string;
   email: string;
-  photoURL: string;
-  totalSolved: number;
-  totalCorrect: number;
-  accuracy: number;
-  currentStreak: number;
-  bestStreak: number;
-  dailyStreak: number;
-  lastPlayedDate: string;
-  xp: number;
-  level: number;
-  averageResponseMs: number;
-  country: string;
-  city: string;
-  isPremium: boolean;
-  badges: string[];
-  createdAt: Timestamp | null;
-  updatedAt: Timestamp | null;
-}
-
-export interface LeaderboardEntry {
-  uid: string;
   displayName: string;
-  photoURL: string;
-  xp: number;
-  level: number;
-  accuracy: number;
-  bestStreak: number;
-  averageResponseMs: number;
-  country: string;
-  city: string;
-  updatedAt: Timestamp | null;
+  totalSolved?: number;
+  bestStreak?: number;
+  dailyStreak?: number;
+  totalTimeSpentMs?: number;
+  averageTimePerProblemMs?: number;
+  dailySolved?: number;
+  weeklySolved?: number;
+  monthlySolved?: number;
 }
 
-export interface GuestData {
-  solved: number;
-  correct: number;
-  streak: number;
-  bestStreak: number;
-  xp: number;
+// ─────────────────────────────────────────────
+// Adaptive Difficulty Engine
+// ─────────────────────────────────────────────
+// Score-based: every correct answer → +1, every wrong → -2
+// Thresholds:  easy→medium at +5, medium→hard at +10, hard→expert at +15
+// Drops:       wrong brings score down, crossing threshold drops level
+
+const DIFFICULTY_ORDER: Difficulty[] = ['easy', 'medium', 'hard', 'expert'];
+const LEVEL_UP_THRESHOLD   = 5;   // consecutive net score to level up
+const LEVEL_DOWN_THRESHOLD = -2;  // net score to level down
+
+// ─────────────────────────────────────────────
+// Problem Generator — high quality, no repeats
+// ─────────────────────────────────────────────
+function rand(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-const GUEST_KEY = 'mathozz_guest';
-const GUEST_LIMIT = 50;
+function randFrom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
-// ─── Service ─────────────────────────────────────────────────────────────────
+/** Generates a mathematically clean, interesting problem for the given difficulty */
+function generateProblem(difficulty: Difficulty, lastAnswer?: number): MathProblem {
+  // Retry up to 10 times to avoid trivial problems (answer=0 for easy/medium)
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const p = _gen(difficulty);
+    // Avoid trivially-boring answers for easy/medium
+    if ((difficulty === 'easy' || difficulty === 'medium') && p.answer === 0) continue;
+    // Avoid the same answer twice in a row
+    if (lastAnswer !== undefined && p.answer === lastAnswer) continue;
+    return p;
+  }
+  return _gen(difficulty);
+}
 
+function _gen(difficulty: Difficulty): MathProblem {
+  switch (difficulty) {
+    case 'easy':   return genEasy();
+    case 'medium': return genMedium();
+    case 'hard':   return genHard();
+    case 'expert': return genExpert();
+  }
+}
+
+// ── EASY: single-op, small numbers ──────────────────────────────────────────
+function genEasy(): MathProblem {
+  const type = rand(0, 3);
+
+  if (type === 0) {
+    // Addition: a + b, both ≤ 20
+    const a = rand(1, 20), b = rand(1, 20);
+    return { text: `${a} + ${b}`, answer: a + b };
+  }
+
+  if (type === 1) {
+    // Subtraction: a - b, result ≥ 0
+    const b = rand(1, 15), a = rand(b, b + 15);
+    return { text: `${a} − ${b}`, answer: a - b };
+  }
+
+  if (type === 2) {
+    // Multiplication: small tables (2–9 × 2–9)
+    const a = rand(2, 9), b = rand(2, 9);
+    return { text: `${a} × ${b}`, answer: a * b };
+  }
+
+  // Division: exact, no remainder
+  const b = rand(2, 9), a = b * rand(1, 9);
+  return { text: `${a} ÷ ${b}`, answer: a / b };
+}
+
+// ── MEDIUM: two-step or larger numbers ──────────────────────────────────────
+function genMedium(): MathProblem {
+  const type = rand(0, 4);
+
+  if (type === 0) {
+    // Multi-step add/subtract: a + b - c
+    const a = rand(10, 60), b = rand(5, 30), c = rand(1, 20);
+    const answer = a + b - c;
+    return { text: `${a} + ${b} − ${c}`, answer };
+  }
+
+  if (type === 1) {
+    // Double-digit × single-digit
+    const a = rand(11, 25), b = rand(3, 9);
+    return { text: `${a} × ${b}`, answer: a * b };
+  }
+
+  if (type === 2) {
+    // Square: n² where n = 4..15
+    const n = rand(4, 15);
+    return { text: `${n}²`, answer: n * n };
+  }
+
+  if (type === 3) {
+    // Percentage: x% of y (multiples of 5, y ≤ 200)
+    const pct = randFrom([10, 20, 25, 50]);
+    const y   = rand(2, 20) * 10;
+    return { text: `${pct}% of ${y}`, answer: Math.round(pct * y / 100) };
+  }
+
+  // Division with larger numbers
+  const b = rand(3, 12), a = b * rand(4, 12);
+  return { text: `${a} ÷ ${b}`, answer: a / b };
+}
+
+// ── HARD: three-step, squares, cube roots, mixed ops ────────────────────────
+function genHard(): MathProblem {
+  const type = rand(0, 4);
+
+  if (type === 0) {
+    // (a + b) × c
+    const a = rand(5, 20), b = rand(5, 20), c = rand(2, 9);
+    return { text: `(${a} + ${b}) × ${c}`, answer: (a + b) * c };
+  }
+
+  if (type === 1) {
+    // Cube: n³ where n = 2..6
+    const n = rand(2, 6);
+    return { text: `${n}³`, answer: n * n * n };
+  }
+
+  if (type === 2) {
+    // Square root (perfect squares up to 225)
+    const n = rand(2, 15);
+    return { text: `√${n * n}`, answer: n };
+  }
+
+  if (type === 3) {
+    // a² + b
+    const a = rand(5, 12), b = rand(2, 20);
+    return { text: `${a}² + ${b}`, answer: a * a + b };
+  }
+
+  // a × b + c × d (order of ops)
+  const a = rand(3, 9), b = rand(3, 9), c = rand(2, 6), d = rand(2, 6);
+  return { text: `${a}×${b} + ${c}×${d}`, answer: a * b + c * d };
+}
+
+// ── EXPERT: multi-step, larger squares, combined ops ────────────────────────
+function genExpert(): MathProblem {
+  const type = rand(0, 4);
+
+  if (type === 0) {
+    // (a² − b²) = (a+b)(a-b)
+    const a = rand(6, 15), b = rand(2, a - 1);
+    return { text: `${a}² − ${b}²`, answer: a * a - b * b };
+  }
+
+  if (type === 1) {
+    // Large multiplication: 2-digit × 2-digit
+    const a = rand(12, 25), b = rand(12, 25);
+    return { text: `${a} × ${b}`, answer: a * b };
+  }
+
+  if (type === 2) {
+    // (a + b)² expanded mentally
+    const a = rand(10, 20), b = rand(1, 9);
+    return { text: `(${a} + ${b})²`, answer: (a + b) ** 2 };
+  }
+
+  if (type === 3) {
+    // Cube root (perfect cubes)
+    const n = randFrom([2, 3, 4, 5, 6]);
+    return { text: `∛${n ** 3}`, answer: n };
+  }
+
+  // Multi-step: a² + b × c − d
+  const a = rand(5, 10), b = rand(3, 8), c = rand(3, 8), d = rand(5, 20);
+  return { text: `${a}² + ${b}×${c} − ${d}`, answer: a * a + b * c - d };
+}
+
+// ─────────────────────────────────────────────
+// Service
+// ─────────────────────────────────────────────
 @Injectable({ providedIn: 'root' })
 export class AppService {
 
-  // ── Screen navigation ──────────────────────────────────────────────────────
-
-  /** Current active screen (no router, signal-driven) */
-  currentScreen = signal<Screen>('home');
-
-  // ── Auth & user ────────────────────────────────────────────────────────────
-
-  /** Authenticated user data from Firestore, or null if guest */
-  user = signal<UserData | null>(null);
-
-  /** Whether an async operation is in progress */
-  isLoading = signal(false);
-
-  /** Auth error message to display */
-  authError = signal<string>('');
-
-  // ── Game state ─────────────────────────────────────────────────────────────
-
-  /** Current session score (correct answers this session) */
-  score = signal(0);
-
-  /** Current in-session streak */
-  streak = signal(0);
-
-  /** Current accumulated XP (synced from user or guest) */
-  xp = signal(0);
-
-  /** Derived level from XP */
-  level = computed(() => Math.floor(this.xp() / 100) + 1);
-
-  /** Active problem being shown */
-  currentProblem = signal<Problem | null>(null);
-
-  /** Seconds remaining for current problem */
-  timeLeft = signal(15);
-
-  /** Whether timer mode is enabled */
-  timerEnabled = signal(true);
-
-  /** Feedback flash after answering */
-  feedback = signal<FeedbackType>(null);
-
-  /** XP earned in this session */
-  sessionXP = signal(0);
-
-  /** Best streak achieved this session */
-  sessionBestStreak = signal(0);
-
-  /** Count of correct answers this session */
-  sessionCorrect = signal(0);
-
-  /** Total answered this session */
-  sessionTotal = signal(0);
-
-  /** Timestamp when current problem started (for speed calculation) */
-  private problemStartTime = 0;
-
-  /** Running average response time in ms */
-  private responseTimes: number[] = [];
-
-  /** Timer interval reference */
-  private timerInterval: ReturnType<typeof setInterval> | null = null;
-
-  // ── Guest mode ─────────────────────────────────────────────────────────────
-
-  /** Number of problems solved as guest */
+  // ── Auth state ──────────────────────────────
+  user             = signal<AppUser | null>(null);
+  isLoading        = signal(false);
+  authError        = signal('');
+  guestGateTriggered = signal(false);
   guestSolvedCount = signal(0);
 
-  /** Whether the guest gate was triggered (redirected from game) */
-  guestGateTriggered = signal(false);
+  // ── Navigation ──────────────────────────────
+  currentScreen    = signal<Screen>('home');
 
-  // ── Leaderboard ────────────────────────────────────────────────────────────
+  // ── Game state ──────────────────────────────
+  currentProblem   = signal<MathProblem | null>(null);
+  difficulty       = signal<Difficulty>('easy');
+  feedback         = signal<'correct' | 'wrong' | null>(null);
 
-  /** Leaderboard entries */
-  leaderboard = signal<LeaderboardEntry[]>([]);
+  // Timer
+  timerEnabled     = signal(false);
+  timeLeft         = signal(15);
+  private _timerHandle: any = null;
 
-  /** Active leaderboard scope */
-  selectedLeaderboardScope = signal<LeaderboardScope>('global');
+  // Session stats
+  sessionSolved    = signal(0);
+  sessionWrong     = signal(0);
+  sessionBestStreak = signal(0);
+  private _sessionStreak = 0;
+  private _sessionStartMs = 0;
 
-  /** Whether leaderboard is loading */
-  leaderboardLoading = signal(false);
+  // Adaptive difficulty state
+  private _diffScore    = 0;   // net score; resets when level changes
+  private _lastAnswer?: number;
 
-  // ── UI / theme ─────────────────────────────────────────────────────────────
+  private readonly _googleProvider = new GoogleAuthProvider();
 
-  /** Dark mode toggle */
-  isDarkMode = signal(false);
-
-  // ── Geolocation ────────────────────────────────────────────────────────────
-
-  /** User's detected country */
-  userCountry = signal('');
-
-  /** User's detected city */
-  userCity = signal('');
-
-  // ── Computed ───────────────────────────────────────────────────────────────
-
-  /** Difficulty tier based on current streak */
-  difficulty = computed<Difficulty>(() => {
-    if (this.streak() >= 25) return 'hard';
-    if (this.streak() >= 10) return 'medium';
-    return 'easy';
-  });
-
-  /** Whether this is a guest session */
+  // ── Computed ────────────────────────────────
   isGuest = computed(() => this.user() === null);
 
-  /** Session accuracy percentage */
   sessionAccuracy = computed(() => {
-    if (this.sessionTotal() === 0) return 0;
-    return Math.round((this.sessionCorrect() / this.sessionTotal()) * 100);
+    const total = this.sessionSolved() + this.sessionWrong();
+    if (total === 0) return 100;
+    return Math.round((this.sessionSolved() / total) * 100);
   });
 
-  // ── Audio context ──────────────────────────────────────────────────────────
-  private audioCtx: AudioContext | null = null;
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Constructor / init
-  // ─────────────────────────────────────────────────────────────────────────
+  // Kept for backwards compat with template
+  sessionStreak = computed(() => this._sessionStreak);
 
   constructor() {
-    this.initAuth();
-    this.loadGuestData();
-    this.loadDarkModePreference();
-    this.detectLocation();
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Auth
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Initialize Firebase auth listener.
-   * On auth state change: fetch/create Firestore doc, merge guest stats.
-   */
-  private initAuth(): void {
-    onAuthStateChanged(firebaseAuth, async (fbUser: FirebaseUser | null) => {
-      if (fbUser) {
-        this.isLoading.set(true);
-        try {
-          await this.onUserLogin(fbUser);
-        } catch (err) {
-          console.error('Auth init error:', err);
-        } finally {
-          this.isLoading.set(false);
-        }
+    onAuthStateChanged(firebaseAuth, (authUser) => {
+      if (authUser) {
+        this.user.set(this._mapAuthUser(authUser));
       } else {
         this.user.set(null);
       }
     });
   }
 
-  /**
-   * Handle post-login tasks: merge guest data, fetch/create Firestore doc.
-   */
-  private async onUserLogin(fbUser: FirebaseUser): Promise<void> {
-    const guest = this.readGuestData();
-    const existing = await this.fetchUserFromFirestore(fbUser.uid);
+  // ── Game lifecycle ──────────────────────────
 
-    const now = new Date().toISOString().split('T')[0];
-    const lastPlayed = existing?.lastPlayedDate ?? '';
-    const { dailyStreak } = this.computeDailyStreak(lastPlayed, existing?.dailyStreak ?? 0);
-
-    const userData: UserData = {
-      uid: fbUser.uid,
-      displayName: existing?.displayName ?? fbUser.displayName ?? 'Anonymous',
-      email: fbUser.email ?? '',
-      photoURL: fbUser.photoURL ?? '',
-      totalSolved: (existing?.totalSolved ?? 0) + guest.solved,
-      totalCorrect: (existing?.totalCorrect ?? 0) + guest.correct,
-      accuracy: 0,
-      currentStreak: Math.max(existing?.currentStreak ?? 0, guest.streak),
-      bestStreak: Math.max(existing?.bestStreak ?? 0, guest.bestStreak),
-      dailyStreak,
-      lastPlayedDate: now,
-      xp: (existing?.xp ?? 0) + guest.xp,
-      level: 1,
-      averageResponseMs: existing?.averageResponseMs ?? 0,
-      country: existing?.country ?? this.userCountry(),
-      city: existing?.city ?? this.userCity(),
-      isPremium: existing?.isPremium ?? false,
-      badges: existing?.badges ?? [],
-      createdAt: existing?.createdAt ?? null,
-      updatedAt: null,
-    };
-
-    const totalSolved = userData.totalSolved;
-    const totalCorrect = userData.totalCorrect;
-    userData.accuracy = totalSolved > 0 ? Math.round((totalCorrect / totalSolved) * 100) : 0;
-    userData.level = Math.floor(userData.xp / 100) + 1;
-
-    this.clearGuestData();
-    this.user.set(userData);
-    this.xp.set(userData.xp);
-    this.streak.set(userData.currentStreak);
-
-    await this.saveUserToFirestore(userData);
-    await this.updateLeaderboardEntry();
+  startGame(): void {
+    this.sessionSolved.set(0);
+    this.sessionWrong.set(0);
+    this.sessionBestStreak.set(0);
+    this._sessionStreak = 0;
+    this._diffScore = 0;
+    this._lastAnswer = undefined;
+    this.difficulty.set('easy');
+    this._sessionStartMs = Date.now();
+    this.currentScreen.set('game');
+    this._nextProblem();
+    if (this.timerEnabled()) this._startTimer();
   }
 
-  /**
-   * Sign in with Google popup.
-   */
+  endGame(): void {
+    this._stopTimer();
+    this.currentScreen.set('result');
+    this.currentProblem.set(null);
+  }
+
+  /** Called by component — synchronous, no await needed */
+  submitAnswer(answer: number): void {
+    const problem = this.currentProblem();
+    if (!problem) return;
+
+    const correct = answer === problem.answer;
+
+    if (correct) {
+      this.sessionSolved.update(n => n + 1);
+      this._sessionStreak++;
+      if (this._sessionStreak > this.sessionBestStreak()) {
+        this.sessionBestStreak.set(this._sessionStreak);
+      }
+      this.feedback.set('correct');
+      this._adaptDifficulty(true);
+    } else {
+      this.sessionWrong.update(n => n + 1);
+      this._sessionStreak = 0;
+      this.feedback.set('wrong');
+      this._adaptDifficulty(false);
+    }
+
+    // Guest gate check
+    if (this.isGuest()) {
+      this.guestSolvedCount.update(n => n + 1);
+      if (this.guestSolvedCount() >= 50) {
+        this.guestGateTriggered.set(true);
+        this.endGame();
+        this.currentScreen.set('login');
+        return;
+      }
+    }
+
+    // Reset feedback + next problem after short delay
+    setTimeout(() => {
+      this.feedback.set(null);
+      this._nextProblem();
+      if (this.timerEnabled()) this._resetTimer();
+    }, 400);
+  }
+
+  // ── Adaptive Difficulty ─────────────────────
+
+  private _adaptDifficulty(correct: boolean): void {
+    const levels = DIFFICULTY_ORDER;
+    const currentIdx = levels.indexOf(this.difficulty());
+
+    this._diffScore += correct ? 1 : -2;
+
+    if (this._diffScore >= LEVEL_UP_THRESHOLD && currentIdx < levels.length - 1) {
+      this.difficulty.set(levels[currentIdx + 1]);
+      this._diffScore = 0;
+    } else if (this._diffScore <= LEVEL_DOWN_THRESHOLD && currentIdx > 0) {
+      this.difficulty.set(levels[currentIdx - 1]);
+      this._diffScore = 0;
+    }
+    // Clamp score within reasonable bounds
+    this._diffScore = Math.max(-4, Math.min(this._diffScore, LEVEL_UP_THRESHOLD));
+  }
+
+  // ── Problem generation ──────────────────────
+
+  private _nextProblem(): void {
+    const p = generateProblem(this.difficulty(), this._lastAnswer);
+    this._lastAnswer = p.answer;
+    this.currentProblem.set(p);
+  }
+
+  // ── Timer ───────────────────────────────────
+
+  toggleTimer(): void {
+    this.timerEnabled.update(v => !v);
+  }
+
+  private _startTimer(): void {
+    this._stopTimer();
+    this.timeLeft.set(15);
+    this._timerHandle = setInterval(() => {
+      this.timeLeft.update(t => {
+        if (t <= 1) {
+          // Time's up — treat as wrong
+          this.submitAnswer(NaN);
+          return 15;
+        }
+        return t - 1;
+      });
+    }, 1000);
+  }
+
+  private _resetTimer(): void {
+    if (!this.timerEnabled()) return;
+    this._stopTimer();
+    this._startTimer();
+  }
+
+  private _stopTimer(): void {
+    if (this._timerHandle) {
+      clearInterval(this._timerHandle);
+      this._timerHandle = null;
+    }
+  }
+
+  // ── Auth ─────────────────────────────────────────────────────────────────
+
   async loginWithGoogle(): Promise<void> {
     this.isLoading.set(true);
     this.authError.set('');
     try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(firebaseAuth, provider);
-      this.guestGateTriggered.set(false);
+      const result = await signInWithPopup(firebaseAuth, this._googleProvider);
+      this.user.set(this._mapAuthUser(result.user));
       this.currentScreen.set('home');
-    } catch (err: unknown) {
-      this.authError.set(this.parseAuthError(err));
+    } catch (error: unknown) {
+      this.authError.set(this._toAuthErrorMessage(error, 'Google sign-in failed.'));
     } finally {
       this.isLoading.set(false);
     }
   }
 
-  /**
-   * Sign in with email and password.
-   */
   async loginWithEmail(email: string, password: string): Promise<void> {
     this.isLoading.set(true);
     this.authError.set('');
     try {
-      await signInWithEmailAndPassword(firebaseAuth, email, password);
-      this.guestGateTriggered.set(false);
+      const cred = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
+      this.user.set(this._mapAuthUser(cred.user));
       this.currentScreen.set('home');
-    } catch (err: unknown) {
-      this.authError.set(this.parseAuthError(err));
+    } catch (error: unknown) {
+      this.authError.set(this._toAuthErrorMessage(error, 'Sign-in failed.'));
     } finally {
       this.isLoading.set(false);
     }
   }
 
-  /**
-   * Register with email, password, and display name.
-   */
-  async signupWithEmail(email: string, password: string, displayName: string): Promise<void> {
+  async signupWithEmail(email: string, password: string, name: string): Promise<void> {
     this.isLoading.set(true);
     this.authError.set('');
     try {
-      const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
-      await updateProfile(cred.user, { displayName });
-      this.guestGateTriggered.set(false);
+      const displayName = name.trim() || email.split('@')[0];
+      const cred = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
+      if (displayName) {
+        await updateProfile(cred.user, { displayName });
+      }
+      this.user.set(this._mapAuthUser({ ...cred.user, displayName }));
       this.currentScreen.set('home');
-    } catch (err: unknown) {
-      this.authError.set(this.parseAuthError(err));
+    } catch (error: unknown) {
+      this.authError.set(this._toAuthErrorMessage(error, 'Sign-up failed.'));
     } finally {
       this.isLoading.set(false);
     }
   }
 
-  /**
-   * Sign out the current user.
-   */
   async logout(): Promise<void> {
+    this.authError.set('');
     try {
       await signOut(firebaseAuth);
       this.user.set(null);
-      this.xp.set(0);
-      this.streak.set(0);
       this.currentScreen.set('home');
-    } catch (err) {
-      console.error('Logout error:', err);
+    } catch (error: unknown) {
+      this.authError.set(this._toAuthErrorMessage(error, 'Sign-out failed.'));
     }
   }
 
-  /**
-   * Parse Firebase auth errors into human-readable messages.
-   */
-  private parseAuthError(err: unknown): string {
-    if (typeof err === 'object' && err !== null && 'code' in err) {
-      const code = (err as { code: string }).code;
-      const map: Record<string, string> = {
-        'auth/user-not-found': 'No account with that email.',
-        'auth/wrong-password': 'Incorrect password.',
-        'auth/email-already-in-use': 'Email already in use.',
-        'auth/invalid-email': 'Invalid email address.',
-        'auth/weak-password': 'Password must be at least 6 characters.',
-        'auth/popup-closed-by-user': 'Sign-in popup was closed.',
-        'auth/network-request-failed': 'Network error. Try again.',
-      };
-      return map[code] ?? 'Authentication failed. Please try again.';
-    }
-    return 'Authentication failed. Please try again.';
+  // ── Utilities ───────────────────────────────
+
+  formatTime(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes === 0) return `${seconds}s`;
+    return `${minutes}m ${seconds}s`;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Firestore
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Save (merge) user data to Firestore.
-   */
-  async saveUserToFirestore(userData: UserData): Promise<void> {
-    try {
-      const ref = doc(firebaseDb, 'users', userData.uid);
-      const payload = {
-        ...userData,
-        updatedAt: serverTimestamp(),
-        createdAt: userData.createdAt ?? serverTimestamp(),
-      };
-      delete (payload as Partial<UserData>).uid;
-      await setDoc(ref, payload, { merge: true });
-    } catch (err) {
-      console.error('saveUserToFirestore error:', err);
-    }
-  }
-
-  /**
-   * Fetch a user document from Firestore by uid.
-   */
-  async fetchUserFromFirestore(uid: string): Promise<UserData | null> {
-    try {
-      const ref = doc(firebaseDb, 'users', uid);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) return null;
-      return { uid, ...snap.data() } as UserData;
-    } catch (err) {
-      console.error('fetchUserFromFirestore error:', err);
-      return null;
-    }
-  }
-
-  /**
-   * Update user stats after answering a problem.
-   */
-  async updateStatsAfterAnswer(correct: boolean, responseMs: number): Promise<void> {
-    const u = this.user();
-    if (!u) return;
-    try {
-      const ref = doc(firebaseDb, 'users', u.uid);
-      const totalSolved = u.totalSolved + 1;
-      const totalCorrect = u.totalCorrect + (correct ? 1 : 0);
-      const accuracy = Math.round((totalCorrect / totalSolved) * 100);
-
-      // running average response time
-      const prev = u.averageResponseMs;
-      const count = totalSolved;
-      const avgMs = Math.round((prev * (count - 1) + responseMs) / count);
-
-      const bestStreak = Math.max(u.bestStreak, this.streak());
-      const now = new Date().toISOString().split('T')[0];
-
-      await updateDoc(ref, {
-        totalSolved,
-        totalCorrect,
-        accuracy,
-        currentStreak: this.streak(),
-        bestStreak,
-        xp: this.xp(),
-        averageResponseMs: avgMs,
-        lastPlayedDate: now,
-        updatedAt: serverTimestamp(),
-      });
-
-      // Update local signal
-      this.user.set({
-        ...u,
-        totalSolved,
-        totalCorrect,
-        accuracy,
-        currentStreak: this.streak(),
-        bestStreak,
-        xp: this.xp(),
-        averageResponseMs: avgMs,
-        lastPlayedDate: now,
-      });
-    } catch (err) {
-      console.error('updateStatsAfterAnswer error:', err);
-    }
-  }
-
-  /**
-   * Write or overwrite the leaderboard entry for the current user.
-   */
-  async updateLeaderboardEntry(): Promise<void> {
-    const u = this.user();
-    if (!u) return;
-    try {
-      const ref = doc(firebaseDb, 'leaderboard', u.uid);
-      const entry: Omit<LeaderboardEntry, 'uid'> = {
-        displayName: u.displayName,
-        photoURL: u.photoURL,
-        xp: u.xp,
-        level: u.level,
-        accuracy: u.accuracy,
-        bestStreak: u.bestStreak,
-        averageResponseMs: u.averageResponseMs,
-        country: u.country,
-        city: u.city,
-        updatedAt: null,
-      };
-      await setDoc(ref, { ...entry, updatedAt: serverTimestamp() }, { merge: true });
-    } catch (err) {
-      console.error('updateLeaderboardEntry error:', err);
-    }
-  }
-
-  /**
-   * Fetch leaderboard entries for the selected scope.
-   */
-  async fetchLeaderboard(scope: LeaderboardScope): Promise<void> {
-    this.leaderboardLoading.set(true);
-    try {
-      const col = collection(firebaseDb, 'leaderboard');
-      let q;
-
-      if (scope === 'country' && this.userCountry()) {
-        q = query(
-          col,
-          where('country', '==', this.userCountry()),
-          orderBy('xp', 'desc'),
-          limit(50)
-        );
-      } else if (scope === 'city' && this.userCity()) {
-        q = query(
-          col,
-          where('city', '==', this.userCity()),
-          orderBy('xp', 'desc'),
-          limit(50)
-        );
-      } else {
-        q = query(col, orderBy('xp', 'desc'), limit(50));
-      }
-
-      const snap = await getDocs(q);
-      const entries: LeaderboardEntry[] = snap.docs.map(d => ({
-        uid: d.id,
-        ...(d.data() as Omit<LeaderboardEntry, 'uid'>),
-      }));
-      this.leaderboard.set(entries);
-    } catch (err) {
-      console.error('fetchLeaderboard error:', err);
-      this.leaderboard.set([]);
-    } finally {
-      this.leaderboardLoading.set(false);
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Game logic
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Start a new game session. Reset session stats and generate first problem.
-   */
-  startGame(): void {
-    this.score.set(0);
-    this.streak.set(0);
-    this.sessionXP.set(0);
-    this.sessionBestStreak.set(0);
-    this.sessionCorrect.set(0);
-    this.sessionTotal.set(0);
-    this.responseTimes = [];
-    this.feedback.set(null);
-    this.generateProblem();
-    this.currentScreen.set('game');
-  }
-
-  /**
-   * Generate a new math problem based on current difficulty.
-   */
-  generateProblem(): void {
-    const diff = this.difficulty();
-    const problem = this.buildProblem(diff);
-    this.currentProblem.set(problem);
-    this.problemStartTime = Date.now();
-    if (this.timerEnabled()) {
-      this.resetTimer();
-    }
-  }
-
-  /**
-   * Build a Problem object for the given difficulty.
-   */
-  private buildProblem(diff: Difficulty): Problem {
-    const operators: Operator[] = ['+', '-', '×', '÷'];
-    const op = operators[Math.floor(Math.random() * operators.length)];
-
-    let num1: number, num2: number, answer: number;
-
-    const range = (min: number, max: number) =>
-      Math.floor(Math.random() * (max - min + 1)) + min;
-
-    switch (diff) {
-      case 'hard':
-        if (op === '÷') {
-          num2 = range(2, 20);
-          answer = range(2, 10);
-          num1 = num2 * answer;
-        } else if (op === '×') {
-          num1 = range(10, 30);
-          num2 = range(10, 30);
-          answer = num1 * num2;
-        } else {
-          num1 = range(50, 200);
-          num2 = range(50, 200);
-          if (op === '-') { if (num2 > num1) [num1, num2] = [num2, num1]; }
-          answer = op === '+' ? num1 + num2 : num1 - num2;
-        }
-        break;
-      case 'medium':
-        if (op === '÷') {
-          num2 = range(2, 10);
-          answer = range(2, 10);
-          num1 = num2 * answer;
-        } else if (op === '×') {
-          num1 = range(5, 20);
-          num2 = range(5, 20);
-          answer = num1 * num2;
-        } else {
-          num1 = range(10, 50);
-          num2 = range(10, 50);
-          if (op === '-') { if (num2 > num1) [num1, num2] = [num2, num1]; }
-          answer = op === '+' ? num1 + num2 : num1 - num2;
-        }
-        break;
-      default: // easy
-        if (op === '÷') {
-          num2 = range(1, 5);
-          answer = range(1, 10);
-          num1 = num2 * answer;
-        } else if (op === '×') {
-          num1 = range(1, 10);
-          num2 = range(1, 10);
-          answer = num1 * num2;
-        } else {
-          num1 = range(1, 10);
-          num2 = range(1, 10);
-          if (op === '-') { if (num2 > num1) [num1, num2] = [num2, num1]; }
-          answer = op === '+' ? num1 + num2 : num1 - num2;
-        }
-    }
-
+  private _mapAuthUser(authUser: User): AppUser {
     return {
-      num1,
-      num2,
-      operator: op,
-      answer,
-      displayQuestion: `${num1} ${op} ${num2} = ?`,
+      uid: authUser.uid,
+      email: authUser.email ?? '',
+      displayName: authUser.displayName ?? authUser.email?.split('@')[0] ?? 'Player',
+      totalSolved: 0,
+      bestStreak: 0,
+      dailyStreak: 0,
+      totalTimeSpentMs: 0,
+      averageTimePerProblemMs: 0,
+      dailySolved: 0,
+      weeklySolved: 0,
+      monthlySolved: 0,
     };
   }
 
-  /**
-   * Submit an answer. Handles scoring, XP, feedback, badges, and advancement.
-   */
-  async submitAnswer(userAnswer: number): Promise<void> {
-    const problem = this.currentProblem();
-    if (!problem) return;
-
-    this.stopTimer();
-    const responseMs = Date.now() - this.problemStartTime;
-    this.responseTimes.push(responseMs);
-
-    const correct = userAnswer === problem.answer;
-    this.sessionTotal.update(n => n + 1);
-
-    if (correct) {
-      const xpGain = this.xpForDifficulty(this.difficulty());
-      this.score.update(n => n + 1);
-      this.streak.update(n => n + 1);
-      this.xp.update(n => n + xpGain);
-      this.sessionXP.update(n => n + xpGain);
-      this.sessionCorrect.update(n => n + 1);
-      this.sessionBestStreak.update(n => Math.max(n, this.streak()));
-      this.feedback.set('correct');
-      this.playSound('correct');
-
-      // Check confetti milestones
-      const s = this.streak();
-      if (s === 10 || s === 25 || s === 50 || s === 100) {
-        this.triggerConfetti();
-        this.playSound('streak');
-      }
-
-      // Update guest or user data
-      if (this.isGuest()) {
-        this.incrementGuestData(true, xpGain);
-      } else {
-        await this.checkAndAwardBadges(responseMs);
-        await this.updateStatsAfterAnswer(true, responseMs);
-        await this.updateLeaderboardEntry();
-      }
-    } else {
-      this.streak.set(0);
-      this.feedback.set('wrong');
-      this.playSound('wrong');
-
-      if (this.isGuest()) {
-        this.incrementGuestData(false, 0);
-      } else {
-        await this.updateStatsAfterAnswer(false, responseMs);
+  private _toAuthErrorMessage(error: unknown, fallback: string): string {
+    if (typeof error === 'object' && error !== null && 'code' in error) {
+      const code = String((error as { code: unknown }).code);
+      switch (code) {
+        case 'auth/popup-closed-by-user':
+          return 'Sign-in popup was closed before completing login.';
+        case 'auth/popup-blocked':
+          return 'Popup was blocked by the browser. Please allow popups and try again.';
+        case 'auth/unauthorized-domain':
+          return 'This domain is not authorized in Firebase Authentication.';
+        case 'auth/invalid-credential':
+          return 'Invalid credentials. Please try again.';
+        case 'auth/user-not-found':
+          return 'No account found for this email.';
+        case 'auth/wrong-password':
+          return 'Incorrect password.';
+        case 'auth/email-already-in-use':
+          return 'This email is already in use.';
+        case 'auth/weak-password':
+          return 'Password should be at least 6 characters.';
+        case 'auth/too-many-requests':
+          return 'Too many attempts. Please try again later.';
+        default:
+          return fallback;
       }
     }
-
-    // Guest gate check
-    if (this.isGuest() && this.guestSolvedCount() >= GUEST_LIMIT) {
-      setTimeout(() => {
-        this.stopTimer();
-        this.guestGateTriggered.set(true);
-        this.currentScreen.set('login');
-      }, 600);
-      return;
-    }
-
-    // Auto-advance
-    setTimeout(() => {
-      this.feedback.set(null);
-      this.generateProblem();
-    }, 600);
-  }
-
-  /**
-   * Returns XP reward for a given difficulty.
-   */
-  private xpForDifficulty(diff: Difficulty): number {
-    if (diff === 'hard') return 35;
-    if (diff === 'medium') return 20;
-    return 10;
-  }
-
-  /**
-   * End the current game session and navigate to result screen.
-   */
-  endGame(): void {
-    this.stopTimer();
-    this.currentScreen.set('result');
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Timer
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Reset and start the countdown timer.
-   */
-  resetTimer(): void {
-    this.stopTimer();
-    this.timeLeft.set(15);
-    this.timerInterval = setInterval(async () => {
-      this.timeLeft.update(t => t - 1);
-      if (this.timeLeft() <= 0) {
-        // Time's up — treat as wrong
-        await this.submitAnswer(-999999);
-      }
-    }, 1000);
-  }
-
-  /**
-   * Stop the countdown timer.
-   */
-  stopTimer(): void {
-    if (this.timerInterval !== null) {
-      clearInterval(this.timerInterval);
-      this.timerInterval = null;
-    }
-  }
-
-  /**
-   * Toggle timer mode on/off.
-   */
-  toggleTimer(): void {
-    this.timerEnabled.update(v => !v);
-    if (!this.timerEnabled()) {
-      this.stopTimer();
-      this.timeLeft.set(15);
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Guest mode
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Load guest data from localStorage on startup.
-   */
-  private loadGuestData(): void {
-    const data = this.readGuestData();
-    this.guestSolvedCount.set(data.solved);
-    this.xp.set(data.xp);
-    this.streak.set(data.streak);
-  }
-
-  /**
-   * Read guest data from localStorage.
-   */
-  private readGuestData(): GuestData {
-    try {
-      const raw = localStorage.getItem(GUEST_KEY);
-      if (!raw) return { solved: 0, correct: 0, streak: 0, bestStreak: 0, xp: 0 };
-      return JSON.parse(raw) as GuestData;
-    } catch {
-      return { solved: 0, correct: 0, streak: 0, bestStreak: 0, xp: 0 };
-    }
-  }
-
-  /**
-   * Increment guest stats and persist to localStorage.
-   */
-  private incrementGuestData(correct: boolean, xpGain: number): void {
-    const data = this.readGuestData();
-    data.solved += 1;
-    if (correct) data.correct += 1;
-    data.streak = correct ? data.streak + 1 : 0;
-    data.bestStreak = Math.max(data.bestStreak, data.streak);
-    data.xp += xpGain;
-    localStorage.setItem(GUEST_KEY, JSON.stringify(data));
-    this.guestSolvedCount.set(data.solved);
-  }
-
-  /**
-   * Clear guest data from localStorage after merging into Firestore.
-   */
-  private clearGuestData(): void {
-    localStorage.removeItem(GUEST_KEY);
-    this.guestSolvedCount.set(0);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Daily streak
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Compute the new daily streak based on lastPlayedDate.
-   * Returns the updated dailyStreak and whether to update.
-   */
-  private computeDailyStreak(
-    lastPlayedDate: string,
-    currentDailyStreak: number
-  ): { dailyStreak: number } {
-    const today = new Date().toISOString().split('T')[0];
-    if (!lastPlayedDate) return { dailyStreak: 1 };
-    if (lastPlayedDate === today) return { dailyStreak: currentDailyStreak };
-
-    const last = new Date(lastPlayedDate);
-    const now = new Date(today);
-    const diffDays = Math.round((now.getTime() - last.getTime()) / 86400000);
-
-    if (diffDays === 1) return { dailyStreak: currentDailyStreak + 1 };
-    return { dailyStreak: 1 };
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Geolocation
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Detect user's country and city via ipapi.co.
-   */
-  async detectLocation(): Promise<void> {
-    try {
-      const res = await fetch('https://ipapi.co/json/');
-      if (!res.ok) return;
-      const data = await res.json() as { country_name?: string; city?: string };
-      this.userCountry.set(data.country_name ?? '');
-      this.userCity.set(data.city ?? '');
-    } catch {
-      // Silently fail — location is optional
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Sound (Web Audio API)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Lazily initialize the Web Audio context.
-   */
-  private getAudioCtx(): AudioContext {
-    if (!this.audioCtx) {
-      this.audioCtx = new AudioContext();
-    }
-    return this.audioCtx;
-  }
-
-  /**
-   * Play a sound effect using Web Audio oscillators (no external library).
-   */
-  playSound(type: 'correct' | 'wrong' | 'streak'): void {
-    try {
-      const ctx = this.getAudioCtx();
-
-      if (type === 'correct') {
-        this.beep(ctx, 880, 0.1, 'sine', 0, 0.15);
-      } else if (type === 'wrong') {
-        this.beep(ctx, 220, 0.15, 'sawtooth', 0, 0.2);
-      } else if (type === 'streak') {
-        this.beep(ctx, 660, 0.1, 'sine', 0, 0.12);
-        this.beep(ctx, 880, 0.1, 'sine', 0.13, 0.12);
-        this.beep(ctx, 1100, 0.15, 'sine', 0.26, 0.2);
-      }
-    } catch {
-      // Audio may be blocked by browser policy — ignore
-    }
-  }
-
-  /**
-   * Create and play a single oscillator beep.
-   */
-  private beep(
-    ctx: AudioContext,
-    freq: number,
-    gain: number,
-    type: OscillatorType,
-    startOffset: number,
-    duration: number
-  ): void {
-    const osc = ctx.createOscillator();
-    const gainNode = ctx.createGain();
-    osc.connect(gainNode);
-    gainNode.connect(ctx.destination);
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, ctx.currentTime + startOffset);
-    gainNode.gain.setValueAtTime(gain, ctx.currentTime + startOffset);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startOffset + duration);
-    osc.start(ctx.currentTime + startOffset);
-    osc.stop(ctx.currentTime + startOffset + duration + 0.01);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Confetti
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Trigger a canvas-based confetti burst. No external library.
-   */
-  triggerConfetti(): void {
-    const canvas = document.createElement('canvas');
-    canvas.style.cssText = `
-      position:fixed;top:0;left:0;width:100%;height:100%;
-      pointer-events:none;z-index:9999;
-    `;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    document.body.appendChild(canvas);
-    const ctx = canvas.getContext('2d')!;
-
-    const particles: {
-      x: number; y: number; vx: number; vy: number;
-      color: string; size: number; rotation: number; rotSpeed: number;
-    }[] = [];
-
-    const colors = ['#6c47ff', '#22c55e', '#f97316', '#ef4444', '#facc15', '#38bdf8'];
-
-    for (let i = 0; i < 120; i++) {
-      particles.push({
-        x: Math.random() * canvas.width,
-        y: -10,
-        vx: (Math.random() - 0.5) * 6,
-        vy: Math.random() * 4 + 2,
-        color: colors[Math.floor(Math.random() * colors.length)],
-        size: Math.random() * 8 + 4,
-        rotation: Math.random() * Math.PI * 2,
-        rotSpeed: (Math.random() - 0.5) * 0.2,
-      });
-    }
-
-    let frame = 0;
-    const animate = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      particles.forEach(p => {
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.1;
-        p.rotation += p.rotSpeed;
-        ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(p.rotation);
-        ctx.fillStyle = p.color;
-        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.5);
-        ctx.restore();
-      });
-      frame++;
-      if (frame < 120) {
-        requestAnimationFrame(animate);
-      } else {
-        canvas.remove();
-      }
-    };
-    requestAnimationFrame(animate);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Badges
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Check and award badges based on current game state.
-   */
-  async checkAndAwardBadges(responseMs: number): Promise<void> {
-    const u = this.user();
-    if (!u) return;
-
-    const badges = [...(u.badges ?? [])];
-    let changed = false;
-
-    const award = (badge: string) => {
-      if (!badges.includes(badge)) {
-        badges.push(badge);
-        changed = true;
-      }
-    };
-
-    if (u.totalCorrect + 1 === 1) award('first_blood');
-    if (this.streak() >= 10) award('streak_10');
-    if (this.streak() >= 25) award('streak_25');
-    if (responseMs < 3000) award('speed_demon');
-    if (u.totalSolved + 1 >= 100) award('century');
-
-    if (changed) {
-      const ref = doc(firebaseDb, 'users', u.uid);
-      await updateDoc(ref, { badges });
-      this.user.set({ ...u, badges });
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Dark mode
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Load dark mode preference from localStorage.
-   */
-  private loadDarkModePreference(): void {
-    const pref = localStorage.getItem('mathozz_darkmode');
-    if (pref === 'true') this.isDarkMode.set(true);
-  }
-
-  /**
-   * Toggle dark mode and persist preference.
-   */
-  toggleDarkMode(): void {
-    this.isDarkMode.update(v => !v);
-    localStorage.setItem('mathozz_darkmode', String(this.isDarkMode()));
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Leaderboard navigation
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Navigate to leaderboard and fetch initial data.
-   */
-  async goToLeaderboard(): Promise<void> {
-    this.currentScreen.set('leaderboard');
-    await this.fetchLeaderboard(this.selectedLeaderboardScope());
-  }
-
-  /**
-   * Switch leaderboard scope and re-fetch.
-   */
-  async switchLeaderboardScope(scope: LeaderboardScope): Promise<void> {
-    this.selectedLeaderboardScope.set(scope);
-    await this.fetchLeaderboard(scope);
+    return fallback;
   }
 }
