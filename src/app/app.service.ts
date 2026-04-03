@@ -1,510 +1,704 @@
 import { Injectable, signal, computed } from '@angular/core';
 import {
-  GoogleAuthProvider,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
   signInWithPopup,
+  GoogleAuthProvider,
+  signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
   signOut,
-  User,
+  onAuthStateChanged,
+  User as FirebaseUser
 } from 'firebase/auth';
-import { firebaseAuth } from './app.config';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  collection,
+  query,
+  orderBy,
+  limit,
+  where,
+  getDocs,
+  serverTimestamp,
+  Timestamp
+} from 'firebase/firestore';
+import { firebaseAuth, firebaseDb } from './app.config';
 
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
-export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert';
-export type Screen = 'home' | 'game' | 'result' | 'login' | 'stats' | 'profile';
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface MathProblem {
-  text: string;
+export type Screen = 'home' | 'game' | 'result' | 'login' | 'leaderboard' | 'profile';
+export type Operator = '+' | '-' | '×' | '÷';
+export type Difficulty = 'easy' | 'medium' | 'hard';
+export type FeedbackType = 'correct' | 'wrong' | null;
+export type LeaderboardScope = 'global' | 'country' | 'city';
+
+export interface Problem {
+  num1: number;
+  num2: number;
+  operator: Operator;
   answer: number;
 }
 
-export interface AppUser {
+export interface UserData {
   uid: string;
-  email: string;
   displayName: string;
-  totalSolved?: number;
-  bestStreak?: number;
-  dailyStreak?: number;
-  totalTimeSpentMs?: number;
-  averageTimePerProblemMs?: number;
-  dailySolved?: number;
-  weeklySolved?: number;
-  monthlySolved?: number;
+  email: string;
+  photoURL: string;
+  totalSolved: number;
+  totalCorrect: number;
+  accuracy: number;
+  currentStreak: number;
+  bestStreak: number;       // best in-session streak ever
+  topSession: number;       // most problems solved correctly in one sitting
+  dailyStreak: number;
+  lastPlayedDate: string;
+  xp: number;
+  level: number;
+  averageResponseMs: number;
+  country: string;
+  city: string;
+  isPremium: boolean;
+  badges: string[];
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
 }
 
-// ─────────────────────────────────────────────
-// Adaptive Difficulty Engine
-// ─────────────────────────────────────────────
-// Score-based: every correct answer → +1, every wrong → -2
-// Thresholds:  easy→medium at +5, medium→hard at +10, hard→expert at +15
-// Drops:       wrong brings score down, crossing threshold drops level
-
-const DIFFICULTY_ORDER: Difficulty[] = ['easy', 'medium', 'hard', 'expert'];
-const LEVEL_UP_THRESHOLD   = 5;   // consecutive net score to level up
-const LEVEL_DOWN_THRESHOLD = -2;  // net score to level down
-
-// ─────────────────────────────────────────────
-// Problem Generator — high quality, no repeats
-// ─────────────────────────────────────────────
-function rand(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+export interface LeaderboardEntry {
+  uid: string;
+  displayName: string;
+  xp: number;
+  level: number;
+  accuracy: number;
+  bestStreak: number;
+  topSession: number;
+  averageResponseMs: number;
+  country: string;
+  city: string;
+  updatedAt: Timestamp | null;
 }
 
-function randFrom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+export interface GuestData {
+  solved: number;
+  correct: number;
+  streak: number;
+  bestStreak: number;
+  topSession: number;
+  xp: number;
 }
 
-/** Generates a mathematically clean, interesting problem for the given difficulty */
-function generateProblem(difficulty: Difficulty, lastAnswer?: number): MathProblem {
-  // Retry up to 10 times to avoid trivial problems (answer=0 for easy/medium)
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const p = _gen(difficulty);
-    // Avoid trivially-boring answers for easy/medium
-    if ((difficulty === 'easy' || difficulty === 'medium') && p.answer === 0) continue;
-    // Avoid the same answer twice in a row
-    if (lastAnswer !== undefined && p.answer === lastAnswer) continue;
-    return p;
-  }
-  return _gen(difficulty);
+/** Per-problem time limit in seconds */
+export const PROBLEM_TIME = 15;
+
+const GUEST_KEY = 'mathozz_guest';
+const GUEST_LIMIT = 50;
+
+// ─── XP calc: time-based + streak bonus ──────────────────────────────────────
+// Base XP by difficulty, multiplied by speed factor (faster = more XP)
+// Streak bonus: +10% per 5-streak milestone
+export function calcXP(
+  difficulty: Difficulty,
+  responseMs: number,
+  streak: number
+): number {
+  const base = difficulty === 'hard' ? 35 : difficulty === 'medium' ? 20 : 10;
+  // Speed factor: full score under 3s, linear decay to 0.4x at 15s
+  const secs = Math.min(responseMs / 1000, PROBLEM_TIME);
+  const speedFactor = Math.max(0.4, 1 - (secs / PROBLEM_TIME) * 0.6);
+  // Streak bonus: +10% every 5 correct
+  const streakBonus = 1 + Math.floor(streak / 5) * 0.1;
+  return Math.round(base * speedFactor * streakBonus);
 }
 
-function _gen(difficulty: Difficulty): MathProblem {
-  switch (difficulty) {
-    case 'easy':   return genEasy();
-    case 'medium': return genMedium();
-    case 'hard':   return genHard();
-    case 'expert': return genExpert();
-  }
-}
+// ─── Service ──────────────────────────────────────────────────────────────────
 
-// ── EASY: single-op, small numbers ──────────────────────────────────────────
-function genEasy(): MathProblem {
-  const type = rand(0, 3);
-
-  if (type === 0) {
-    // Addition: a + b, both ≤ 20
-    const a = rand(1, 20), b = rand(1, 20);
-    return { text: `${a} + ${b}`, answer: a + b };
-  }
-
-  if (type === 1) {
-    // Subtraction: a - b, result ≥ 0
-    const b = rand(1, 15), a = rand(b, b + 15);
-    return { text: `${a} − ${b}`, answer: a - b };
-  }
-
-  if (type === 2) {
-    // Multiplication: small tables (2–9 × 2–9)
-    const a = rand(2, 9), b = rand(2, 9);
-    return { text: `${a} × ${b}`, answer: a * b };
-  }
-
-  // Division: exact, no remainder
-  const b = rand(2, 9), a = b * rand(1, 9);
-  return { text: `${a} ÷ ${b}`, answer: a / b };
-}
-
-// ── MEDIUM: two-step or larger numbers ──────────────────────────────────────
-function genMedium(): MathProblem {
-  const type = rand(0, 4);
-
-  if (type === 0) {
-    // Multi-step add/subtract: a + b - c
-    const a = rand(10, 60), b = rand(5, 30), c = rand(1, 20);
-    const answer = a + b - c;
-    return { text: `${a} + ${b} − ${c}`, answer };
-  }
-
-  if (type === 1) {
-    // Double-digit × single-digit
-    const a = rand(11, 25), b = rand(3, 9);
-    return { text: `${a} × ${b}`, answer: a * b };
-  }
-
-  if (type === 2) {
-    // Square: n² where n = 4..15
-    const n = rand(4, 15);
-    return { text: `${n}²`, answer: n * n };
-  }
-
-  if (type === 3) {
-    // Percentage: x% of y (multiples of 5, y ≤ 200)
-    const pct = randFrom([10, 20, 25, 50]);
-    const y   = rand(2, 20) * 10;
-    return { text: `${pct}% of ${y}`, answer: Math.round(pct * y / 100) };
-  }
-
-  // Division with larger numbers
-  const b = rand(3, 12), a = b * rand(4, 12);
-  return { text: `${a} ÷ ${b}`, answer: a / b };
-}
-
-// ── HARD: three-step, squares, cube roots, mixed ops ────────────────────────
-function genHard(): MathProblem {
-  const type = rand(0, 4);
-
-  if (type === 0) {
-    // (a + b) × c
-    const a = rand(5, 20), b = rand(5, 20), c = rand(2, 9);
-    return { text: `(${a} + ${b}) × ${c}`, answer: (a + b) * c };
-  }
-
-  if (type === 1) {
-    // Cube: n³ where n = 2..6
-    const n = rand(2, 6);
-    return { text: `${n}³`, answer: n * n * n };
-  }
-
-  if (type === 2) {
-    // Square root (perfect squares up to 225)
-    const n = rand(2, 15);
-    return { text: `√${n * n}`, answer: n };
-  }
-
-  if (type === 3) {
-    // a² + b
-    const a = rand(5, 12), b = rand(2, 20);
-    return { text: `${a}² + ${b}`, answer: a * a + b };
-  }
-
-  // a × b + c × d (order of ops)
-  const a = rand(3, 9), b = rand(3, 9), c = rand(2, 6), d = rand(2, 6);
-  return { text: `${a}×${b} + ${c}×${d}`, answer: a * b + c * d };
-}
-
-// ── EXPERT: multi-step, larger squares, combined ops ────────────────────────
-function genExpert(): MathProblem {
-  const type = rand(0, 4);
-
-  if (type === 0) {
-    // (a² − b²) = (a+b)(a-b)
-    const a = rand(6, 15), b = rand(2, a - 1);
-    return { text: `${a}² − ${b}²`, answer: a * a - b * b };
-  }
-
-  if (type === 1) {
-    // Large multiplication: 2-digit × 2-digit
-    const a = rand(12, 25), b = rand(12, 25);
-    return { text: `${a} × ${b}`, answer: a * b };
-  }
-
-  if (type === 2) {
-    // (a + b)² expanded mentally
-    const a = rand(10, 20), b = rand(1, 9);
-    return { text: `(${a} + ${b})²`, answer: (a + b) ** 2 };
-  }
-
-  if (type === 3) {
-    // Cube root (perfect cubes)
-    const n = randFrom([2, 3, 4, 5, 6]);
-    return { text: `∛${n ** 3}`, answer: n };
-  }
-
-  // Multi-step: a² + b × c − d
-  const a = rand(5, 10), b = rand(3, 8), c = rand(3, 8), d = rand(5, 20);
-  return { text: `${a}² + ${b}×${c} − ${d}`, answer: a * a + b * c - d };
-}
-
-// ─────────────────────────────────────────────
-// Service
-// ─────────────────────────────────────────────
 @Injectable({ providedIn: 'root' })
 export class AppService {
 
-  // ── Auth state ──────────────────────────────
-  user             = signal<AppUser | null>(null);
-  isLoading        = signal(false);
-  authError        = signal('');
-  guestGateTriggered = signal(false);
-  guestSolvedCount = signal(0);
+  // ── Navigation ────────────────────────────────────────────────────────────
+  currentScreen = signal<Screen>('home');
 
-  // ── Navigation ──────────────────────────────
-  currentScreen    = signal<Screen>('home');
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  user = signal<UserData | null>(null);
+  isLoading = signal(false);
+  authError = signal('');
 
-  // ── Game state ──────────────────────────────
-  currentProblem   = signal<MathProblem | null>(null);
-  difficulty       = signal<Difficulty>('easy');
-  feedback         = signal<'correct' | 'wrong' | null>(null);
+  // ── Game state ────────────────────────────────────────────────────────────
 
-  // Timer
-  timerEnabled     = signal(false);
-  timeLeft         = signal(15);
-  private _timerHandle: any = null;
+  /** Correct answers this session */
+  sessionCorrect = signal(0);
 
-  // Session stats
-  sessionSolved    = signal(0);
-  sessionWrong     = signal(0);
+  /** Wrong answers this session */
+  sessionWrong = signal(0);
+
+  /** Current in-session consecutive streak */
+  streak = signal(0);
+
+  /** Best streak this session */
   sessionBestStreak = signal(0);
-  private _sessionStreak = 0;
-  private _sessionStartMs = 0;
 
-  // Adaptive difficulty state
-  private _diffScore    = 0;   // net score; resets when level changes
-  private _lastAnswer?: number;
+  /** XP earned this session */
+  sessionXP = signal(0);
 
-  private readonly _googleProvider = new GoogleAuthProvider();
+  /** Total answered this session */
+  sessionTotal = signal(0);
 
-  // ── Computed ────────────────────────────────
+  /** Current active problem */
+  currentProblem = signal<Problem | null>(null);
+
+  /** Answer being built by numpad */
+  currentInput = signal('');
+
+  /** Seconds remaining on current problem timer */
+  timeLeft = signal(PROBLEM_TIME);
+
+  /** Feedback state after answering */
+  feedback = signal<FeedbackType>(null);
+
+  /** Whether a problem is transitioning (brief lock after answer) */
+  isTransitioning = signal(false);
+
+  /** milliseconds when current problem was shown */
+  private problemStartMs = 0;
+
+  /** interval handle */
+  private timerHandle: ReturnType<typeof setInterval> | null = null;
+
+  // ── Guest ─────────────────────────────────────────────────────────────────
+  guestSolvedCount = signal(0);
+  guestGateTriggered = signal(false);
+
+  // ── Leaderboard ───────────────────────────────────────────────────────────
+  leaderboard = signal<LeaderboardEntry[]>([]);
+  selectedLeaderboardScope = signal<LeaderboardScope>('global');
+  leaderboardLoading = signal(false);
+
+  // ── Theme ─────────────────────────────────────────────────────────────────
+  isDarkMode = signal(true); // default dark (blackboard)
+
+  // ── Geo ───────────────────────────────────────────────────────────────────
+  userCountry = signal('');
+  userCity = signal('');
+
+  // ── Computed ─────────────────────────────────────────────────────────────
+
+  /** Difficulty based on session streak */
+  difficulty = computed<Difficulty>(() => {
+    const s = this.streak();
+    if (s >= 20) return 'hard';
+    if (s >= 8)  return 'medium';
+    return 'easy';
+  });
+
   isGuest = computed(() => this.user() === null);
 
   sessionAccuracy = computed(() => {
-    const total = this.sessionSolved() + this.sessionWrong();
-    if (total === 0) return 100;
-    return Math.round((this.sessionSolved() / total) * 100);
+    const t = this.sessionTotal();
+    return t === 0 ? 0 : Math.round((this.sessionCorrect() / t) * 100);
   });
 
-  // Kept for backwards compat with template
-  sessionStreak = computed(() => this._sessionStreak);
-
+  // ─────────────────────────────────────────────────────────────────────────
   constructor() {
-    onAuthStateChanged(firebaseAuth, (authUser) => {
-      if (authUser) {
-        this.user.set(this._mapAuthUser(authUser));
+    this.initAuth();
+    this.loadGuestData();
+    this.loadThemePref();
+    this.detectLocation();
+  }
+
+  // ─── Auth ─────────────────────────────────────────────────────────────────
+
+  private initAuth(): void {
+    onAuthStateChanged(firebaseAuth, async (fb: FirebaseUser | null) => {
+      if (fb) {
+        this.isLoading.set(true);
+        try { await this.onUserLogin(fb); }
+        catch (e) { console.error(e); }
+        finally { this.isLoading.set(false); }
       } else {
         this.user.set(null);
       }
     });
   }
 
-  // ── Game lifecycle ──────────────────────────
+  private async onUserLogin(fb: FirebaseUser): Promise<void> {
+    const guest = this.readGuestData();
+    const existing = await this.fetchUserFromFirestore(fb.uid);
+    const today = new Date().toISOString().split('T')[0];
+    const { dailyStreak } = this.calcDailyStreak(
+      existing?.lastPlayedDate ?? '', existing?.dailyStreak ?? 0
+    );
 
-  startGame(): void {
-    this.sessionSolved.set(0);
-    this.sessionWrong.set(0);
-    this.sessionBestStreak.set(0);
-    this._sessionStreak = 0;
-    this._diffScore = 0;
-    this._lastAnswer = undefined;
-    this.difficulty.set('easy');
-    this._sessionStartMs = Date.now();
-    this.currentScreen.set('game');
-    this._nextProblem();
-    if (this.timerEnabled()) this._startTimer();
+    const u: UserData = {
+      uid: fb.uid,
+      displayName: existing?.displayName ?? fb.displayName ?? 'Anonymous',
+      email: fb.email ?? '',
+      photoURL: fb.photoURL ?? '',
+      totalSolved:     (existing?.totalSolved ?? 0) + guest.solved,
+      totalCorrect:    (existing?.totalCorrect ?? 0) + guest.correct,
+      accuracy: 0,
+      currentStreak:   Math.max(existing?.currentStreak ?? 0, guest.streak),
+      bestStreak:      Math.max(existing?.bestStreak ?? 0, guest.bestStreak),
+      topSession:      Math.max(existing?.topSession ?? 0, guest.topSession),
+      dailyStreak,
+      lastPlayedDate:  today,
+      xp:              (existing?.xp ?? 0) + guest.xp,
+      level:           1,
+      averageResponseMs: existing?.averageResponseMs ?? 0,
+      country: existing?.country ?? this.userCountry(),
+      city:    existing?.city    ?? this.userCity(),
+      isPremium: existing?.isPremium ?? false,
+      badges:    existing?.badges ?? [],
+      createdAt: existing?.createdAt ?? null,
+      updatedAt: null,
+    };
+    const ts = u.totalSolved;
+    const tc = u.totalCorrect;
+    u.accuracy = ts > 0 ? Math.round((tc / ts) * 100) : 0;
+    u.level = Math.floor(u.xp / 100) + 1;
+
+    this.clearGuestData();
+    this.user.set(u);
+    await this.saveUserToFirestore(u);
+    await this.updateLeaderboardEntry();
   }
-
-  endGame(): void {
-    this._stopTimer();
-    this.currentScreen.set('result');
-    this.currentProblem.set(null);
-  }
-
-  /** Called by component — synchronous, no await needed */
-  submitAnswer(answer: number): void {
-    const problem = this.currentProblem();
-    if (!problem) return;
-
-    const correct = answer === problem.answer;
-
-    if (correct) {
-      this.sessionSolved.update(n => n + 1);
-      this._sessionStreak++;
-      if (this._sessionStreak > this.sessionBestStreak()) {
-        this.sessionBestStreak.set(this._sessionStreak);
-      }
-      this.feedback.set('correct');
-      this._adaptDifficulty(true);
-    } else {
-      this.sessionWrong.update(n => n + 1);
-      this._sessionStreak = 0;
-      this.feedback.set('wrong');
-      this._adaptDifficulty(false);
-    }
-
-    // Guest gate check
-    if (this.isGuest()) {
-      this.guestSolvedCount.update(n => n + 1);
-      if (this.guestSolvedCount() >= 50) {
-        this.guestGateTriggered.set(true);
-        this.endGame();
-        this.currentScreen.set('login');
-        return;
-      }
-    }
-
-    // Reset feedback + next problem after short delay
-    setTimeout(() => {
-      this.feedback.set(null);
-      this._nextProblem();
-      if (this.timerEnabled()) this._resetTimer();
-    }, 400);
-  }
-
-  // ── Adaptive Difficulty ─────────────────────
-
-  private _adaptDifficulty(correct: boolean): void {
-    const levels = DIFFICULTY_ORDER;
-    const currentIdx = levels.indexOf(this.difficulty());
-
-    this._diffScore += correct ? 1 : -2;
-
-    if (this._diffScore >= LEVEL_UP_THRESHOLD && currentIdx < levels.length - 1) {
-      this.difficulty.set(levels[currentIdx + 1]);
-      this._diffScore = 0;
-    } else if (this._diffScore <= LEVEL_DOWN_THRESHOLD && currentIdx > 0) {
-      this.difficulty.set(levels[currentIdx - 1]);
-      this._diffScore = 0;
-    }
-    // Clamp score within reasonable bounds
-    this._diffScore = Math.max(-4, Math.min(this._diffScore, LEVEL_UP_THRESHOLD));
-  }
-
-  // ── Problem generation ──────────────────────
-
-  private _nextProblem(): void {
-    const p = generateProblem(this.difficulty(), this._lastAnswer);
-    this._lastAnswer = p.answer;
-    this.currentProblem.set(p);
-  }
-
-  // ── Timer ───────────────────────────────────
-
-  toggleTimer(): void {
-    this.timerEnabled.update(v => !v);
-  }
-
-  private _startTimer(): void {
-    this._stopTimer();
-    this.timeLeft.set(15);
-    this._timerHandle = setInterval(() => {
-      this.timeLeft.update(t => {
-        if (t <= 1) {
-          // Time's up — treat as wrong
-          this.submitAnswer(NaN);
-          return 15;
-        }
-        return t - 1;
-      });
-    }, 1000);
-  }
-
-  private _resetTimer(): void {
-    if (!this.timerEnabled()) return;
-    this._stopTimer();
-    this._startTimer();
-  }
-
-  private _stopTimer(): void {
-    if (this._timerHandle) {
-      clearInterval(this._timerHandle);
-      this._timerHandle = null;
-    }
-  }
-
-  // ── Auth ─────────────────────────────────────────────────────────────────
 
   async loginWithGoogle(): Promise<void> {
     this.isLoading.set(true);
     this.authError.set('');
     try {
-      const result = await signInWithPopup(firebaseAuth, this._googleProvider);
-      this.user.set(this._mapAuthUser(result.user));
+      await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
+      this.guestGateTriggered.set(false);
       this.currentScreen.set('home');
-    } catch (error: unknown) {
-      this.authError.set(this._toAuthErrorMessage(error, 'Google sign-in failed.'));
-    } finally {
-      this.isLoading.set(false);
-    }
+    } catch (e) { this.authError.set(this.parseAuthErr(e)); }
+    finally { this.isLoading.set(false); }
   }
 
   async loginWithEmail(email: string, password: string): Promise<void> {
     this.isLoading.set(true);
     this.authError.set('');
     try {
-      const cred = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
-      this.user.set(this._mapAuthUser(cred.user));
+      await signInWithEmailAndPassword(firebaseAuth, email, password);
+      this.guestGateTriggered.set(false);
       this.currentScreen.set('home');
-    } catch (error: unknown) {
-      this.authError.set(this._toAuthErrorMessage(error, 'Sign-in failed.'));
-    } finally {
-      this.isLoading.set(false);
-    }
+    } catch (e) { this.authError.set(this.parseAuthErr(e)); }
+    finally { this.isLoading.set(false); }
   }
 
-  async signupWithEmail(email: string, password: string, name: string): Promise<void> {
+  async signupWithEmail(email: string, password: string, displayName: string): Promise<void> {
     this.isLoading.set(true);
     this.authError.set('');
     try {
-      const displayName = name.trim() || email.split('@')[0];
-      const cred = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
-      if (displayName) {
-        await updateProfile(cred.user, { displayName });
-      }
-      this.user.set(this._mapAuthUser({ ...cred.user, displayName }));
+      const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+      await updateProfile(cred.user, { displayName });
+      this.guestGateTriggered.set(false);
       this.currentScreen.set('home');
-    } catch (error: unknown) {
-      this.authError.set(this._toAuthErrorMessage(error, 'Sign-up failed.'));
-    } finally {
-      this.isLoading.set(false);
-    }
+    } catch (e) { this.authError.set(this.parseAuthErr(e)); }
+    finally { this.isLoading.set(false); }
   }
 
   async logout(): Promise<void> {
-    this.authError.set('');
     try {
       await signOut(firebaseAuth);
       this.user.set(null);
       this.currentScreen.set('home');
-    } catch (error: unknown) {
-      this.authError.set(this._toAuthErrorMessage(error, 'Sign-out failed.'));
-    }
+    } catch (e) { console.error(e); }
   }
 
-  // ── Utilities ───────────────────────────────
-
-  formatTime(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    if (minutes === 0) return `${seconds}s`;
-    return `${minutes}m ${seconds}s`;
-  }
-
-  private _mapAuthUser(authUser: User): AppUser {
-    return {
-      uid: authUser.uid,
-      email: authUser.email ?? '',
-      displayName: authUser.displayName ?? authUser.email?.split('@')[0] ?? 'Player',
-      totalSolved: 0,
-      bestStreak: 0,
-      dailyStreak: 0,
-      totalTimeSpentMs: 0,
-      averageTimePerProblemMs: 0,
-      dailySolved: 0,
-      weeklySolved: 0,
-      monthlySolved: 0,
+  private parseAuthErr(e: unknown): string {
+    const code = (e as { code?: string })?.code ?? '';
+    const map: Record<string, string> = {
+      'auth/user-not-found': 'No account found.',
+      'auth/wrong-password': 'Incorrect password.',
+      'auth/email-already-in-use': 'Email already in use.',
+      'auth/invalid-email': 'Invalid email address.',
+      'auth/weak-password': 'Password needs 6+ characters.',
+      'auth/popup-closed-by-user': 'Sign-in popup closed.',
     };
+    return map[code] ?? 'Authentication failed. Try again.';
   }
 
-  private _toAuthErrorMessage(error: unknown, fallback: string): string {
-    if (typeof error === 'object' && error !== null && 'code' in error) {
-      const code = String((error as { code: unknown }).code);
-      switch (code) {
-        case 'auth/popup-closed-by-user':
-          return 'Sign-in popup was closed before completing login.';
-        case 'auth/popup-blocked':
-          return 'Popup was blocked by the browser. Please allow popups and try again.';
-        case 'auth/unauthorized-domain':
-          return 'This domain is not authorized in Firebase Authentication.';
-        case 'auth/invalid-credential':
-          return 'Invalid credentials. Please try again.';
-        case 'auth/user-not-found':
-          return 'No account found for this email.';
-        case 'auth/wrong-password':
-          return 'Incorrect password.';
-        case 'auth/email-already-in-use':
-          return 'This email is already in use.';
-        case 'auth/weak-password':
-          return 'Password should be at least 6 characters.';
-        case 'auth/too-many-requests':
-          return 'Too many attempts. Please try again later.';
-        default:
-          return fallback;
+  // ─── Firestore ────────────────────────────────────────────────────────────
+
+  async saveUserToFirestore(u: UserData): Promise<void> {
+    try {
+      const ref = doc(firebaseDb, 'users', u.uid);
+      const { uid, ...rest } = u;
+      await setDoc(ref, { ...rest, updatedAt: serverTimestamp(), createdAt: u.createdAt ?? serverTimestamp() }, { merge: true });
+    } catch (e) { console.error(e); }
+  }
+
+  async fetchUserFromFirestore(uid: string): Promise<UserData | null> {
+    try {
+      const snap = await getDoc(doc(firebaseDb, 'users', uid));
+      return snap.exists() ? { uid, ...snap.data() } as UserData : null;
+    } catch (e) { console.error(e); return null; }
+  }
+
+  private async persistStats(responseMs: number, correct: boolean): Promise<void> {
+    const u = this.user();
+    if (!u) return;
+    try {
+      const totalSolved  = u.totalSolved + 1;
+      const totalCorrect = u.totalCorrect + (correct ? 1 : 0);
+      const accuracy     = Math.round((totalCorrect / totalSolved) * 100);
+      const bestStreak   = Math.max(u.bestStreak, this.streak());
+      const topSession   = Math.max(u.topSession, this.sessionCorrect());
+      const count        = totalSolved;
+      const avgMs        = Math.round((u.averageResponseMs * (count - 1) + responseMs) / count);
+      const today        = new Date().toISOString().split('T')[0];
+      const xp           = u.xp + (correct ? calcXP(this.difficulty(), responseMs, this.streak()) : 0);
+
+      await updateDoc(doc(firebaseDb, 'users', u.uid), {
+        totalSolved, totalCorrect, accuracy, bestStreak, topSession,
+        currentStreak: this.streak(), xp, averageResponseMs: avgMs,
+        lastPlayedDate: today, updatedAt: serverTimestamp(),
+      });
+
+      this.user.set({ ...u, totalSolved, totalCorrect, accuracy, bestStreak, topSession, xp, averageResponseMs: avgMs, lastPlayedDate: today });
+    } catch (e) { console.error(e); }
+  }
+
+  async updateLeaderboardEntry(): Promise<void> {
+    const u = this.user();
+    if (!u) return;
+    try {
+      await setDoc(doc(firebaseDb, 'leaderboard', u.uid), {
+        displayName: u.displayName, xp: u.xp, level: u.level,
+        accuracy: u.accuracy, bestStreak: u.bestStreak, topSession: u.topSession,
+        averageResponseMs: u.averageResponseMs, country: u.country, city: u.city,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    } catch (e) { console.error(e); }
+  }
+
+  async fetchLeaderboard(scope: LeaderboardScope): Promise<void> {
+    this.leaderboardLoading.set(true);
+    try {
+      const col = collection(firebaseDb, 'leaderboard');
+      let q;
+      if (scope === 'country' && this.userCountry()) {
+        q = query(col, where('country', '==', this.userCountry()), orderBy('xp', 'desc'), limit(50));
+      } else if (scope === 'city' && this.userCity()) {
+        q = query(col, where('city', '==', this.userCity()), orderBy('xp', 'desc'), limit(50));
+      } else {
+        q = query(col, orderBy('xp', 'desc'), limit(50));
+      }
+      const snap = await getDocs(q);
+      this.leaderboard.set(snap.docs.map(d => ({ uid: d.id, ...(d.data() as Omit<LeaderboardEntry, 'uid'>) })));
+    } catch (e) { console.error(e); this.leaderboard.set([]); }
+    finally { this.leaderboardLoading.set(false); }
+  }
+
+  // ─── Game ─────────────────────────────────────────────────────────────────
+
+  /** Start a fresh game session */
+  startGame(): void {
+    this.sessionCorrect.set(0);
+    this.sessionWrong.set(0);
+    this.sessionTotal.set(0);
+    this.sessionXP.set(0);
+    this.sessionBestStreak.set(0);
+    this.streak.set(0);
+    this.currentInput.set('');
+    this.feedback.set(null);
+    this.isTransitioning.set(false);
+    this.nextProblem();
+    this.currentScreen.set('game');
+  }
+
+  /** Generate and show next problem, start timer */
+  nextProblem(): void {
+    this.currentProblem.set(this.buildProblem());
+    this.currentInput.set('');
+    this.feedback.set(null);
+    this.isTransitioning.set(false);
+    this.problemStartMs = Date.now();
+    this.startTimer();
+  }
+
+  private buildProblem(): Problem {
+    const diff = this.difficulty();
+    const ops: Operator[] = ['+', '-', '×', '÷'];
+    const op = ops[Math.floor(Math.random() * ops.length)];
+
+    const r = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a;
+
+    let n1: number, n2: number, ans: number;
+
+    if (op === '÷') {
+      if (diff === 'easy')   { n2 = r(1,5);  ans = r(1,10); }
+      else if (diff === 'medium') { n2 = r(2,12); ans = r(2,12); }
+      else                   { n2 = r(2,20); ans = r(2,20); }
+      n1 = n2 * ans;
+    } else if (op === '×') {
+      if (diff === 'easy')   { n1 = r(2,9);  n2 = r(2,9);  }
+      else if (diff === 'medium') { n1 = r(3,25); n2 = r(3,25); }
+      else                   { n1 = r(12,50); n2 = r(12,50); }
+      ans = n1 * n2;
+    } else {
+      if (diff === 'easy')   { n1 = r(1,20);  n2 = r(1,20);  }
+      else if (diff === 'medium') { n1 = r(10,99);  n2 = r(10,99);  }
+      else                   { n1 = r(50,500); n2 = r(50,500); }
+      if (op === '-' && n2 > n1) { [n1, n2] = [n2, n1]; }
+      ans = op === '+' ? n1 + n2 : n1 - n2;
+    }
+
+    return { num1: n1, num2: n2, operator: op, answer: ans };
+  }
+
+  // ─── Numpad input ─────────────────────────────────────────────────────────
+
+  /** Append digit from numpad press */
+  pressDigit(d: string): void {
+    if (this.isTransitioning()) return;
+    const cur = this.currentInput();
+    if (cur.length >= 7) return; // max 7 digits
+    this.currentInput.set(cur + d);
+  }
+
+  /** Backspace on numpad */
+  pressBackspace(): void {
+    if (this.isTransitioning()) return;
+    const cur = this.currentInput();
+    this.currentInput.set(cur.slice(0, -1));
+  }
+
+  /** Clear numpad input */
+  pressClear(): void {
+    if (this.isTransitioning()) return;
+    this.currentInput.set('');
+  }
+
+  /** Submit current numpad value as answer */
+  async submitAnswer(): Promise<void> {
+    if (this.isTransitioning()) return;
+    const input = this.currentInput();
+    if (!input) return;
+
+    const problem = this.currentProblem();
+    if (!problem) return;
+
+    this.stopTimer();
+    this.isTransitioning.set(true);
+
+    const responseMs = Date.now() - this.problemStartMs;
+    const userAns = parseInt(input, 10);
+    const correct = userAns === problem.answer;
+
+    this.sessionTotal.update(n => n + 1);
+
+    if (correct) {
+      const xpGain = calcXP(this.difficulty(), responseMs, this.streak());
+      this.sessionCorrect.update(n => n + 1);
+      this.streak.update(n => n + 1);
+      this.sessionXP.update(n => n + xpGain);
+      this.sessionBestStreak.update(n => Math.max(n, this.streak()));
+      this.feedback.set('correct');
+      this.playSound('correct');
+
+      const s = this.streak();
+      if (s === 10 || s === 25 || s === 50 || s === 100) {
+        this.triggerConfetti();
+        this.playSound('streak');
+      }
+    } else {
+      this.streak.set(0);
+      this.feedback.set('wrong');
+      this.playSound('wrong');
+    }
+
+    if (!this.isGuest()) {
+      await this.persistStats(responseMs, correct);
+      await this.updateLeaderboardEntry();
+    } else {
+      this.updateGuest(correct, correct ? calcXP(this.difficulty(), responseMs, this.streak()) : 0);
+      if (this.guestSolvedCount() >= GUEST_LIMIT) {
+        setTimeout(() => { this.stopTimer(); this.guestGateTriggered.set(true); this.currentScreen.set('login'); }, 400);
+        return;
       }
     }
-    return fallback;
+
+    // auto-advance after short delay — no slide animation, just swap
+    setTimeout(() => this.nextProblem(), 400);
+  }
+
+  endGame(): void {
+    this.stopTimer();
+    this.currentScreen.set('result');
+  }
+
+  // ─── Timer ────────────────────────────────────────────────────────────────
+
+  private startTimer(): void {
+    this.stopTimer();
+    this.timeLeft.set(PROBLEM_TIME);
+    this.timerHandle = setInterval(async () => {
+      this.timeLeft.update(t => t - 1);
+      if (this.timeLeft() <= 0) {
+        // time's up → wrong, advance
+        this.stopTimer();
+        this.isTransitioning.set(true);
+        this.sessionTotal.update(n => n + 1);
+        this.sessionWrong.update(n => n + 1);
+        this.streak.set(0);
+        this.feedback.set('wrong');
+        this.playSound('wrong');
+        if (!this.isGuest()) {
+          await this.persistStats(PROBLEM_TIME * 1000, false);
+        } else {
+          this.updateGuest(false, 0);
+        }
+        setTimeout(() => this.nextProblem(), 400);
+      }
+    }, 1000);
+  }
+
+  stopTimer(): void {
+    if (this.timerHandle !== null) {
+      clearInterval(this.timerHandle);
+      this.timerHandle = null;
+    }
+  }
+
+  // ─── Guest ────────────────────────────────────────────────────────────────
+
+  private loadGuestData(): void {
+    const g = this.readGuestData();
+    this.guestSolvedCount.set(g.solved);
+  }
+
+  private readGuestData(): GuestData {
+    try {
+      const raw = localStorage.getItem(GUEST_KEY);
+      return raw ? JSON.parse(raw) : { solved: 0, correct: 0, streak: 0, bestStreak: 0, topSession: 0, xp: 0 };
+    } catch { return { solved: 0, correct: 0, streak: 0, bestStreak: 0, topSession: 0, xp: 0 }; }
+  }
+
+  private updateGuest(correct: boolean, xpGain: number): void {
+    const g = this.readGuestData();
+    g.solved += 1;
+    if (correct) g.correct += 1;
+    g.streak = correct ? g.streak + 1 : 0;
+    g.bestStreak = Math.max(g.bestStreak, g.streak);
+    g.topSession = Math.max(g.topSession, this.sessionCorrect());
+    g.xp += xpGain;
+    localStorage.setItem(GUEST_KEY, JSON.stringify(g));
+    this.guestSolvedCount.set(g.solved);
+  }
+
+  private clearGuestData(): void {
+    localStorage.removeItem(GUEST_KEY);
+    this.guestSolvedCount.set(0);
+  }
+
+  // ─── Daily streak ─────────────────────────────────────────────────────────
+
+  private calcDailyStreak(lastDate: string, current: number): { dailyStreak: number } {
+    const today = new Date().toISOString().split('T')[0];
+    if (!lastDate) return { dailyStreak: 1 };
+    if (lastDate === today) return { dailyStreak: current };
+    const diff = Math.round((new Date(today).getTime() - new Date(lastDate).getTime()) / 86400000);
+    return { dailyStreak: diff === 1 ? current + 1 : 1 };
+  }
+
+  // ─── Geolocation ──────────────────────────────────────────────────────────
+
+  async detectLocation(): Promise<void> {
+    try {
+      const res = await fetch('https://ipapi.co/json/');
+      if (!res.ok) return;
+      const d = await res.json() as { country_name?: string; city?: string };
+      this.userCountry.set(d.country_name ?? '');
+      this.userCity.set(d.city ?? '');
+    } catch { /* silent */ }
+  }
+
+  // ─── Sound ────────────────────────────────────────────────────────────────
+
+  private audioCtx: AudioContext | null = null;
+
+  private getCtx(): AudioContext {
+    if (!this.audioCtx) this.audioCtx = new AudioContext();
+    return this.audioCtx;
+  }
+
+  playSound(type: 'correct' | 'wrong' | 'streak'): void {
+    try {
+      const ctx = this.getCtx();
+      if (type === 'correct')      this.beep(ctx, 880, 'sine',     0,    0.08, 0.1);
+      else if (type === 'wrong')   this.beep(ctx, 220, 'sawtooth', 0,    0.1,  0.15);
+      else {
+        this.beep(ctx, 660, 'sine', 0, 0.08, 0.1);
+        this.beep(ctx, 880, 'sine', 0.11, 0.08, 0.1);
+        this.beep(ctx, 1100,'sine', 0.22, 0.12, 0.15);
+      }
+    } catch { /* ignore */ }
+  }
+
+  private beep(ctx: AudioContext, freq: number, type: OscillatorType, start: number, gain: number, dur: number): void {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.connect(g); g.connect(ctx.destination);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+    g.gain.setValueAtTime(gain, ctx.currentTime + start);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+    osc.start(ctx.currentTime + start);
+    osc.stop(ctx.currentTime + start + dur + 0.01);
+  }
+
+  // ─── Confetti ─────────────────────────────────────────────────────────────
+
+  triggerConfetti(): void {
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:9999;';
+    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+    document.body.appendChild(canvas);
+    const ctx = canvas.getContext('2d')!;
+    const cols = ['#e8c547','#a8d8a8','#f4a261','#e76f51','#90e0ef','#caf0f8'];
+    const parts = Array.from({ length: 100 }, () => ({
+      x: Math.random() * canvas.width, y: -10,
+      vx: (Math.random() - 0.5) * 5, vy: Math.random() * 3 + 2,
+      color: cols[Math.floor(Math.random() * cols.length)],
+      sz: Math.random() * 7 + 3, rot: Math.random() * Math.PI * 2, rs: (Math.random() - 0.5) * 0.15,
+    }));
+    let f = 0;
+    const tick = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      parts.forEach(p => {
+        p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.rot += p.rs;
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillStyle = p.color; ctx.fillRect(-p.sz / 2, -p.sz / 4, p.sz, p.sz / 2);
+        ctx.restore();
+      });
+      if (++f < 130) requestAnimationFrame(tick); else canvas.remove();
+    };
+    requestAnimationFrame(tick);
+  }
+
+  // ─── Theme ────────────────────────────────────────────────────────────────
+
+  private loadThemePref(): void {
+    // default dark (blackboard). Only load if user previously set light.
+    const p = localStorage.getItem('mathozz_theme');
+    if (p === 'light') this.isDarkMode.set(false);
+    else this.isDarkMode.set(true);
+  }
+
+  toggleDarkMode(): void {
+    this.isDarkMode.update(v => !v);
+    localStorage.setItem('mathozz_theme', this.isDarkMode() ? 'dark' : 'light');
+  }
+
+  // ─── Leaderboard nav ──────────────────────────────────────────────────────
+
+  async goToLeaderboard(): Promise<void> {
+    this.currentScreen.set('leaderboard');
+    await this.fetchLeaderboard(this.selectedLeaderboardScope());
+  }
+
+  async switchLeaderboardScope(s: LeaderboardScope): Promise<void> {
+    this.selectedLeaderboardScope.set(s);
+    await this.fetchLeaderboard(s);
   }
 }
