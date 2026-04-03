@@ -519,7 +519,7 @@ export class AppService {
     }
 
     // auto-advance after short delay — no slide animation, just swap
-    setTimeout(() => this.nextProblem(), 400);
+    setTimeout(() => this.nextProblem(), 100);
   }
 
   endGame(): void {
@@ -548,7 +548,7 @@ export class AppService {
         } else {
           this.updateGuest(false, 0);
         }
-        setTimeout(() => this.nextProblem(), 400);
+        setTimeout(() => this.nextProblem(), 100);
       }
     }, 1000);
   }
