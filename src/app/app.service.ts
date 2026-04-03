@@ -78,6 +78,23 @@ export interface LeaderboardEntry {
   updatedAt: Timestamp | null;
 }
 
+export interface ProblemReport {
+  id: string;
+  userId: string | null;
+  userEmail: string | null;
+  userAgent: string;
+  description: string;
+  timestamp: Timestamp;
+  resolved: boolean;
+  screen: Screen;
+  gameState?: {
+    currentProblem?: Problem;
+    score?: number;
+    streak?: number;
+    difficulty?: Difficulty;
+  };
+}
+
 export interface GuestData {
   solved: number;
   correct: number;
@@ -700,5 +717,58 @@ export class AppService {
   async switchLeaderboardScope(s: LeaderboardScope): Promise<void> {
     this.selectedLeaderboardScope.set(s);
     await this.fetchLeaderboard(s);
+  }
+
+  // ─── Problem Reports ──────────────────────────────────────────────────────
+
+  async submitProblemReport(description: string): Promise<void> {
+    // Validate and sanitize input
+    if (!description || typeof description !== 'string') return;
+    
+    const sanitized = description.trim();
+    
+    // Enforce max length
+    if (sanitized.length === 0 || sanitized.length > 500) return;
+    
+    // Prevent excessive parsing/encoding attacks
+    const report: Omit<ProblemReport, 'id'> = {
+      userId: this.user()?.uid || null,
+      userEmail: this.user()?.email || null,
+      userAgent: navigator.userAgent.substring(0, 256), // Limit UA string
+      description: sanitized,
+      timestamp: serverTimestamp() as Timestamp,
+      resolved: false,
+      screen: this.currentScreen(),
+      ...(this.currentScreen() === 'game' && {
+        gameState: {
+          currentProblem: this.currentProblem() || undefined,
+          score: this.sessionCorrect(),
+          streak: this.streak(),
+          difficulty: this.difficulty()
+        }
+      })
+    };
+
+
+    const docRef = doc(collection(firebaseDb, 'problem-reports'));
+    await setDoc(docRef, report);
+  }
+
+  async getProblemReports(): Promise<ProblemReport[]> {
+    const q = query(
+      collection(firebaseDb, 'problem-reports'),
+      orderBy('timestamp', 'desc'),
+      limit(100)
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    } as ProblemReport));
+  }
+
+  async markReportResolved(reportId: string): Promise<void> {
+    const docRef = doc(firebaseDb, 'problem-reports', reportId);
+    await updateDoc(docRef, { resolved: true });
   }
 }

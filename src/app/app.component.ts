@@ -2,14 +2,16 @@ import {
   Component, inject, signal,
   ChangeDetectionStrategy, OnInit, OnDestroy,
 } from '@angular/core';
+import { RouterOutlet, Router, NavigationEnd } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { filter } from 'rxjs/operators';
 import { AppService } from './app.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, RouterOutlet],
   styleUrls: ['./app.scss'],
   host: { '[class.theme-light]': '!svc.isDarkMode()' },
   template: `
@@ -39,14 +41,40 @@ import { AppService } from './app.service';
       </div>
     }
 
-    <!-- ══════════════════════════════════════════
-         GAME SCREEN
-    ══════════════════════════════════════════ -->
+    <!-- ── Report Problem Modal ── -->
+    @if (showReportModal()) {
+      <div class="report-overlay" (click)="showReportModal.set(false)">
+        <div class="report-sheet" (click)="$event.stopPropagation()">
+          <div class="report-sheet-title">Report a Problem</div>
+          <div class="report-sheet-sub">Help us improve by reporting any issues you encounter.</div>
+          <textarea
+            class="report-textarea"
+            [(ngModel)]="reportText"
+            placeholder="Describe the problem you're experiencing..."
+            rows="4"
+            maxlength="500"></textarea>
+          <div class="report-sheet-btns">
+            <button class="btn btn-outline btn-lg" style="flex:1" (click)="showReportModal.set(false)">
+              Cancel
+            </button>
+            <button class="btn btn-primary btn-lg" style="flex:1" (click)="submitReport()" [disabled]="!reportText.trim()">
+              <i class="fa-solid fa-paper-plane"></i> Submit Report
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Main App Screens (hidden on admin routes) -->
+    @if (!isAdminRoute()) {
+      <!-- ══════════════════════════════════════════
+           GAME SCREEN
+      ══════════════════════════════════════════ -->
     @if (svc.currentScreen() === 'game') {
       <div class="game-wrap screen" (click)="gameWrapClick($event)">
 
         <div class="game-header">
-          <span class="gh-logo">Mathozz</span>
+          <span class="gh-logo" (click)="svc.currentScreen.set('home')">Mathozz</span>
           <div class="gh-stats">
             <div class="ghs-item">
               <div class="ghs-label">Correct</div>
@@ -62,7 +90,7 @@ import { AppService } from './app.service';
             </div>
           </div>
           <button class="gh-back" (click)="svc.endGame()">
-            <i class="fa-solid fa-stop"></i> End
+            <i class="fa-solid fa-stop"></i>
           </button>
         </div>
 
@@ -114,8 +142,8 @@ import { AppService } from './app.service';
 
         @if (svc.isGuest()) {
           <div class="guest-strip">
-            <span class="gs-label">{{ 50 - svc.guestSolvedCount() }} free problems left</span>
-            <div class="gs-track"><div class="gs-fill" [style.width.%]="(svc.guestSolvedCount()/50)*100"></div></div>
+            <span class="gs-label">{{ Math.max(0, 50 - svc.guestSolvedCount()) }} free problems left</span>
+            <div class="gs-track"><div class="gs-fill" [style.width.%]="Math.min((svc.guestSolvedCount()/50)*100, 100)"></div></div>
           </div>
         }
       </div>
@@ -157,7 +185,7 @@ import { AppService } from './app.service';
 
         <main class="main">
           <div class="topbar">
-            <div class="tb-logo">Mathozz</div>
+            <div class="tb-logo" (click)="svc.currentScreen.set('home')">Mathozz</div>
             <div style="display:flex;align-items:center;gap:8px;">
               @if (!svc.isGuest()) {
                 <span class="tb-user">{{ svc.user()!.displayName }}</span>
@@ -169,7 +197,7 @@ import { AppService } from './app.service';
               <div class="hero-eyebrow">{{ svc.isGuest() ? 'Guest Mode' : 'Welcome back' }}</div>
               <div class="hero-title">{{ svc.isGuest() ? 'Ready to train?' : 'Keep going.' }}</div>
               <div class="hero-sub">
-                @if (svc.isGuest()) { {{ 50 - svc.guestSolvedCount() }} free problems remaining }
+                @if (svc.isGuest()) { {{ Math.max(0, 50 - svc.guestSolvedCount()) }} free problems remaining }
                 @else { {{ svc.user()!.totalSolved }} solved · {{ svc.user()!.accuracy }}% accuracy }
               </div>
               <div class="hero-btns">
@@ -182,8 +210,8 @@ import { AppService } from './app.service';
             @if (svc.isGuest()) {
               <div class="guest-banner">
                 <div class="gp">
-                  <div class="gp-lbl"><span>Guest Progress</span><span>{{ svc.guestSolvedCount() }} / 50</span></div>
-                  <div class="prog-track"><div class="prog-fill" [style.width.%]="(svc.guestSolvedCount()/50)*100"></div></div>
+                  <div class="gp-lbl"><span>Guest Progress</span><span>{{ Math.min(svc.guestSolvedCount(), 50) }} / 50</span></div>
+                  <div class="prog-track"><div class="prog-fill" [style.width.%]="Math.min((svc.guestSolvedCount()/50)*100, 100)"></div></div>
                 </div>
                 <button class="btn btn-primary btn-sm" (click)="svc.currentScreen.set('login')">Sign Up</button>
               </div>
@@ -192,6 +220,10 @@ import { AppService } from './app.service';
             @if (!svc.isGuest()) {
               <div>
                 <div class="section-hd">Your Numbers</div>
+                <div style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;padding:0 4px;">
+                  <div style="margin-bottom:6px;"><strong>Top Session:</strong> Total correct answers in your best single game</div>
+                  <div><strong>Best Streak:</strong> Longest chain of consecutive correct answers (no mistakes in between)</div>
+                </div>
                 <div class="stats-grid">
                   <div class="sc"><div class="sc-lbl">Total Solved</div><div class="sc-val">{{ svc.user()!.totalSolved }}</div></div>
                   <div class="sc"><div class="sc-lbl">Accuracy</div><div class="sc-val">{{ svc.user()!.accuracy }}%</div></div>
@@ -199,13 +231,7 @@ import { AppService } from './app.service';
                   <div class="sc"><div class="sc-lbl">Best Streak</div><div class="sc-val c-streak">{{ svc.user()!.bestStreak }}</div></div>
                 </div>
               </div>
-              <div class="sc">
-                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-                  <div class="sc-lbl" style="margin:0;">Level {{ svc.user()!.level }}</div>
-                  <div style="font-size:0.68rem;color:var(--muted);">{{ svc.user()!.xp % 100 }} / 100 XP</div>
-                </div>
-                <div class="prog-track"><div class="prog-fill" [style.width.%]="svc.user()!.xp % 100"></div></div>
-              </div>
+           
             }
           </div>
         </main>
@@ -243,7 +269,7 @@ import { AppService } from './app.service';
           </nav>
         </aside>
         <main class="main">
-          <div class="topbar"><div class="tb-logo">Mathozz</div></div>
+          <div class="topbar"><div class="tb-logo" (click)="svc.currentScreen.set('home')">Mathozz</div></div>
           <div class="result-content">
             <div class="result-top">
               <div>
@@ -366,7 +392,7 @@ import { AppService } from './app.service';
     @if (svc.currentScreen() === 'profile') {
       <div class="screen shell">
         <aside class="sidebar">
-          <div class="sb-top"><div class="sb-brand">Mathozz</div><div class="sb-tagline">Think fast.</div></div>
+          <div class="sb-top"><div class="sb-brand" (click)="svc.currentScreen.set('home')">Mathozz</div><div class="sb-tagline">Think fast.</div></div>
           <nav class="sb-nav">
             <button class="ni" (click)="svc.currentScreen.set('home')"><i class="fa-solid fa-house"></i><span>Dashboard</span></button>
             <button class="ni" (click)="svc.startGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
@@ -384,43 +410,36 @@ import { AppService } from './app.service';
           </div>
         </aside>
         <main class="main">
-          <div class="topbar"><div class="tb-logo">Mathozz</div></div>
+          <div class="topbar"><div class="tb-logo" (click)="svc.currentScreen.set('home')">Mathozz</div></div>
           @if (svc.user(); as u) {
             <div class="profile-content">
               <div class="profile-hero">
-                <div class="pav" [style.background]="avatarColor(u.displayName)">
-                  {{ u.displayName.charAt(0).toUpperCase() }}
-                </div>
+                @if (u.photoURL) {
+                  <img class="pav pav-photo" [src]="u.photoURL" [alt]="u.displayName" />
+                } @else {
+                  <div class="pav" [style.background]="avatarColor(u.displayName)">
+                    {{ u.displayName.charAt(0).toUpperCase() }}
+                  </div>
+                }
                 <div style="flex:1;min-width:0;">
                   <div class="pm-name">{{ u.displayName }}</div>
                   <div class="pm-email">{{ u.email }}</div>
                   <div class="pm-chips">
-                    <span class="chip chip-green">Level {{ u.level }}</span>
-                    <span class="chip chip-neutral">{{ u.xp }} XP</span>
                     @if (u.isPremium) { <span class="chip chip-green">Premium</span> }
                   </div>
                 </div>
               </div>
-              <div class="sc">
-                <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
-                  <div class="sc-lbl" style="margin:0;">Level {{ u.level }}</div>
-                  <div style="font-size:0.68rem;color:var(--muted);">{{ 100-(u.xp%100) }} XP to next</div>
-                </div>
-                <div class="prog-track"><div class="prog-fill" [style.width.%]="u.xp%100"></div></div>
-              </div>
-              @if (u.dailyStreak > 0) {
-                <div class="streak-banner">
-                  <div class="sb-icon">🔥</div>
-                  <div><div class="sb-lbl">Daily Streak</div><div class="sb-num">{{ u.dailyStreak }} days</div></div>
-                </div>
-              }
               <div>
                 <div class="section-hd">Statistics</div>
+                <div style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;padding:0 4px;">
+                  <div style="margin-bottom:6px;"><strong>Top Session:</strong> Total correct answers in your best single game</div>
+                  <div><strong>Best Streak:</strong> Longest chain of consecutive correct answers (no mistakes in between)</div>
+                </div>
                 <div class="stats-grid">
                   <div class="sc"><div class="sc-lbl">Total Solved</div><div class="sc-val">{{ u.totalSolved }}</div></div>
                   <div class="sc"><div class="sc-lbl">Accuracy</div><div class="sc-val">{{ u.accuracy }}%</div></div>
-                  <div class="sc"><div class="sc-lbl">Top Session</div><div class="sc-val c-correct">{{ u.topSession }}</div></div>
-                  <div class="sc"><div class="sc-lbl">Best Streak</div><div class="sc-val c-streak">{{ u.bestStreak }}</div></div>
+                  <div class="sc" title="How many you got right overall in your best game"><div class="sc-lbl">Top Session</div><div class="sc-val c-correct">{{ u.topSession }}</div></div>
+                  <div class="sc" title="What's the most you got right in a row, ever"><div class="sc-lbl">Best Streak</div><div class="sc-val c-streak">{{ u.bestStreak }}</div></div>
                 </div>
               </div>
               @if (u.badges.length > 0) {
@@ -433,6 +452,9 @@ import { AppService } from './app.service';
                   </div>
                 </div>
               }
+              <button class="gh-report" (click)="showReportModal.set(true)">
+                <i class="fa-solid fa-flag"></i> Report
+              </button>
             </div>
           }
         </main>
@@ -451,24 +473,53 @@ import { AppService } from './app.service';
         </div>
       </nav>
     }
-  `
+    } <!-- End Main App Screens conditional -->
+
+    <!-- ── Toast Notification ── -->
+    @if (showToast()) {
+      <div class="toast-overlay" (click)="showToast.set(false)">
+        <div class="toast" (click)="$event.stopPropagation()">
+          <i class="fa-solid fa-check-circle"></i>
+          <span>{{ toastMessage() }}</span>
+        </div>
+      </div>
+    }
+
+    <router-outlet></router-outlet>  `
 })
 export class AppComponent implements OnInit, OnDestroy {
   readonly svc = inject(AppService);
+  private router = inject(Router);
 
   loginTab          = signal<'login' | 'signup'>('login');
   showLogoutConfirm = signal(false);
+  showReportModal   = signal(false);
+  showToast         = signal(false);
+  toastMessage      = signal('');
+  isAdminRoute      = signal(false);
 
   loginEmail    = '';
   loginPassword = '';
   signupName    = '';
+  reportText    = '';
 
   readonly numpadKeys = ['1','2','3','4','5','6','7','8','9','CLR','0','⌫'];
+  readonly Math = Math;  // Expose Math for templates
 
   private boundKeydown = this.onKeydown.bind(this);
 
   ngOnInit(): void {
     document.addEventListener('keydown', this.boundKeydown, true);
+
+    // Listen for route changes to hide/show main app UI
+    this.router.events.pipe(
+      filter(event => event instanceof NavigationEnd)
+    ).subscribe((event: NavigationEnd) => {
+      this.isAdminRoute.set(event.url.includes('admin-reports-secret-2024'));
+    });
+
+    // Check initial route
+    this.isAdminRoute.set(this.router.url.includes('admin-reports-secret-2024'));
   }
   ngOnDestroy(): void {
     document.removeEventListener('keydown', this.boundKeydown, true);
@@ -506,6 +557,23 @@ export class AppComponent implements OnInit, OnDestroy {
   async confirmLogout(): Promise<void> {
     this.showLogoutConfirm.set(false);
     await this.svc.logout();
+  }
+
+  async submitReport(): Promise<void> {
+    if (!this.reportText.trim()) return;
+    try {
+      await this.svc.submitProblemReport(this.reportText);
+      this.reportText = '';
+      this.showReportModal.set(false);
+      this.showToast.set(true);
+      this.toastMessage.set('Problem submitted successfully!');
+      setTimeout(() => this.showToast.set(false), 3000);
+    } catch (error) {
+      console.error('Failed to submit report:', error);
+      this.showToast.set(true);
+      this.toastMessage.set('Failed to submit report. Please try again.');
+      setTimeout(() => this.showToast.set(false), 3000);
+    }
   }
 
   async onAuthSubmit(): Promise<void> {
