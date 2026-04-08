@@ -49,8 +49,8 @@ export interface UserData {
   totalCorrect: number;
   accuracy: number;
   currentStreak: number;
-  bestStreak: number;       // best in-session streak ever
-  topSession: number;       // most problems solved correctly in one sitting
+  bestStreak: number;
+  topSession: number;
   dailyStreak: number;
   lastPlayedDate: string;
   xp: number;
@@ -104,25 +104,35 @@ export interface GuestData {
   xp: number;
 }
 
+/** Saved game state for pause/resume */
+interface SavedGameState {
+  sessionCorrect:    number;
+  sessionWrong:      number;
+  sessionSkipped:    number;
+  sessionTotal:      number;
+  sessionXP:         number;
+  sessionBestStreak: number;
+  streak:            number;
+  currentProblem:    Problem;
+  timeLeft:          number;
+}
+
 /** Per-problem time limit in seconds */
 export const PROBLEM_TIME = 15;
 
-const GUEST_KEY = 'mathozz_guest';
-const GUEST_LIMIT = 50;
+const GUEST_KEY      = 'mathozz_guest';
+const GUEST_LIMIT    = 50;
+const SAVED_GAME_KEY = 'mathozz_saved_game';
 
-// ─── XP calc: time-based + streak bonus ──────────────────────────────────────
-// Base XP by difficulty, multiplied by speed factor (faster = more XP)
-// Streak bonus: +10% per 5-streak milestone
+// ─── XP calc ──────────────────────────────────────────────────────────────────
 export function calcXP(
   difficulty: Difficulty,
   responseMs: number,
   streak: number
 ): number {
   const base = difficulty === 'hard' ? 35 : difficulty === 'medium' ? 20 : 10;
-  // Speed factor: full score under 3s, linear decay to 0.4x at 15s
   const secs = Math.min(responseMs / 1000, PROBLEM_TIME);
   const speedFactor = Math.max(0.4, 1 - (secs / PROBLEM_TIME) * 0.6);
-  // Streak bonus: +10% every 5 correct
   const streakBonus = 1 + Math.floor(streak / 5) * 0.1;
   return Math.round(base * speedFactor * streakBonus);
 }
@@ -136,70 +146,46 @@ export class AppService {
   currentScreen = signal<Screen>('home');
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  user = signal<UserData | null>(null);
+  user      = signal<UserData | null>(null);
   isLoading = signal(false);
   authError = signal('');
 
   // ── Game state ────────────────────────────────────────────────────────────
-
-  /** Correct answers this session */
-  sessionCorrect = signal(0);
-
-  /** Wrong answers this session */
-  sessionWrong = signal(0);
-
-  /** Current in-session consecutive streak */
-  streak = signal(0);
-
-  /** Best streak this session */
+  sessionCorrect    = signal(0);
+  sessionWrong      = signal(0);
+  sessionSkipped    = signal(0);   // NEW: questions timed out with no input
+  streak            = signal(0);
   sessionBestStreak = signal(0);
+  sessionXP         = signal(0);
+  sessionTotal      = signal(0);
+  currentProblem    = signal<Problem | null>(null);
+  currentInput      = signal('');
+  timeLeft          = signal(PROBLEM_TIME);
+  feedback          = signal<FeedbackType>(null);
+  isTransitioning   = signal(false);
+  isPaused          = signal(false);   // NEW: pause/resume
+  hasSavedGame      = signal(false);   // NEW: saved game exists
 
-  /** XP earned this session */
-  sessionXP = signal(0);
-
-  /** Total answered this session */
-  sessionTotal = signal(0);
-
-  /** Current active problem */
-  currentProblem = signal<Problem | null>(null);
-
-  /** Answer being built by numpad */
-  currentInput = signal('');
-
-  /** Seconds remaining on current problem timer */
-  timeLeft = signal(PROBLEM_TIME);
-
-  /** Feedback state after answering */
-  feedback = signal<FeedbackType>(null);
-
-  /** Whether a problem is transitioning (brief lock after answer) */
-  isTransitioning = signal(false);
-
-  /** milliseconds when current problem was shown */
   private problemStartMs = 0;
-
-  /** interval handle */
   private timerHandle: ReturnType<typeof setInterval> | null = null;
 
   // ── Guest ─────────────────────────────────────────────────────────────────
-  guestSolvedCount = signal(0);
+  guestSolvedCount   = signal(0);
   guestGateTriggered = signal(false);
 
   // ── Leaderboard ───────────────────────────────────────────────────────────
-  leaderboard = signal<LeaderboardEntry[]>([]);
+  leaderboard              = signal<LeaderboardEntry[]>([]);
   selectedLeaderboardScope = signal<LeaderboardScope>('global');
-  leaderboardLoading = signal(false);
+  leaderboardLoading       = signal(false);
 
   // ── Theme ─────────────────────────────────────────────────────────────────
-  isDarkMode = signal(true); // default dark (blackboard)
+  isDarkMode = signal(true);
 
   // ── Geo ───────────────────────────────────────────────────────────────────
   userCountry = signal('');
-  userCity = signal('');
+  userCity    = signal('');
 
-  // ── Computed ─────────────────────────────────────────────────────────────
-
-  /** Difficulty based on session streak */
+  // ── Computed ──────────────────────────────────────────────────────────────
   difficulty = computed<Difficulty>(() => {
     const s = this.streak();
     if (s >= 20) return 'hard';
@@ -209,9 +195,10 @@ export class AppService {
 
   isGuest = computed(() => this.user() === null);
 
+  // Accuracy counts only attempted (correct + wrong), skips excluded
   sessionAccuracy = computed(() => {
-    const t = this.sessionTotal();
-    return t === 0 ? 0 : Math.round((this.sessionCorrect() / t) * 100);
+    const attempted = this.sessionCorrect() + this.sessionWrong();
+    return attempted === 0 ? 0 : Math.round((this.sessionCorrect() / attempted) * 100);
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -220,6 +207,8 @@ export class AppService {
     this.loadGuestData();
     this.loadThemePref();
     this.detectLocation();
+    // Check for a saved game from previous session
+    this.hasSavedGame.set(!!localStorage.getItem(SAVED_GAME_KEY));
   }
 
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -238,21 +227,21 @@ export class AppService {
   }
 
   private async onUserLogin(fb: FirebaseUser): Promise<void> {
-    const guest = this.readGuestData();
+    const guest    = this.readGuestData();
     const existing = await this.fetchUserFromFirestore(fb.uid);
-    const today = new Date().toISOString().split('T')[0];
+    const today    = new Date().toISOString().split('T')[0];
     const { dailyStreak } = this.calcDailyStreak(
       existing?.lastPlayedDate ?? '', existing?.dailyStreak ?? 0
     );
 
     const u: UserData = {
-      uid: fb.uid,
-      displayName: existing?.displayName ?? fb.displayName ?? 'Anonymous',
-      email: fb.email ?? '',
-      photoURL: fb.photoURL ?? '',
-      totalSolved:     (existing?.totalSolved ?? 0) + guest.solved,
-      totalCorrect:    (existing?.totalCorrect ?? 0) + guest.correct,
-      accuracy: 0,
+      uid:          fb.uid,
+      displayName:  existing?.displayName ?? fb.displayName ?? 'Anonymous',
+      email:        fb.email ?? '',
+      photoURL:     fb.photoURL ?? '',
+      totalSolved:  (existing?.totalSolved ?? 0) + guest.solved,
+      totalCorrect: (existing?.totalCorrect ?? 0) + guest.correct,
+      accuracy:     0,
       currentStreak:   Math.max(existing?.currentStreak ?? 0, guest.streak),
       bestStreak:      Math.max(existing?.bestStreak ?? 0, guest.bestStreak),
       topSession:      Math.max(existing?.topSession ?? 0, guest.topSession),
@@ -261,8 +250,8 @@ export class AppService {
       xp:              (existing?.xp ?? 0) + guest.xp,
       level:           1,
       averageResponseMs: existing?.averageResponseMs ?? 0,
-      country: existing?.country ?? this.userCountry(),
-      city:    existing?.city    ?? this.userCity(),
+      country:   existing?.country ?? this.userCountry(),
+      city:      existing?.city    ?? this.userCity(),
       isPremium: existing?.isPremium ?? false,
       badges:    existing?.badges ?? [],
       createdAt: existing?.createdAt ?? null,
@@ -271,7 +260,7 @@ export class AppService {
     const ts = u.totalSolved;
     const tc = u.totalCorrect;
     u.accuracy = ts > 0 ? Math.round((tc / ts) * 100) : 0;
-    u.level = Math.floor(u.xp / 100) + 1;
+    u.level    = Math.floor(u.xp / 100) + 1;
 
     this.clearGuestData();
     this.user.set(u);
@@ -324,12 +313,12 @@ export class AppService {
   private parseAuthErr(e: unknown): string {
     const code = (e as { code?: string })?.code ?? '';
     const map: Record<string, string> = {
-      'auth/user-not-found': 'No account found.',
-      'auth/wrong-password': 'Incorrect password.',
-      'auth/email-already-in-use': 'Email already in use.',
-      'auth/invalid-email': 'Invalid email address.',
-      'auth/weak-password': 'Password needs 6+ characters.',
-      'auth/popup-closed-by-user': 'Sign-in popup closed.',
+      'auth/user-not-found':      'No account found.',
+      'auth/wrong-password':      'Incorrect password.',
+      'auth/email-already-in-use':'Email already in use.',
+      'auth/invalid-email':       'Invalid email address.',
+      'auth/weak-password':       'Password needs 6+ characters.',
+      'auth/popup-closed-by-user':'Sign-in popup closed.',
     };
     return map[code] ?? 'Authentication failed. Try again.';
   }
@@ -408,17 +397,20 @@ export class AppService {
 
   // ─── Game ─────────────────────────────────────────────────────────────────
 
-  /** Start a fresh game session */
+  /** Start a completely fresh game session */
   startGame(): void {
     this.sessionCorrect.set(0);
     this.sessionWrong.set(0);
+    this.sessionSkipped.set(0);      // reset skips
     this.sessionTotal.set(0);
     this.sessionXP.set(0);
     this.sessionBestStreak.set(0);
     this.streak.set(0);
+    this.isPaused.set(false);        // ensure not paused
     this.currentInput.set('');
     this.feedback.set(null);
     this.isTransitioning.set(false);
+    this.hasSavedGame.set(false);    // clear saved game flag
     this.nextProblem();
     this.currentScreen.set('game');
   }
@@ -443,20 +435,20 @@ export class AppService {
     let n1: number, n2: number, ans: number;
 
     if (op === '÷') {
-      if (diff === 'easy')   { n2 = r(1,5);  ans = r(1,10); }
+      if (diff === 'easy')        { n2 = r(1,5);  ans = r(1,10); }
       else if (diff === 'medium') { n2 = r(2,12); ans = r(2,12); }
-      else                   { n2 = r(2,20); ans = r(2,20); }
+      else                        { n2 = r(2,20); ans = r(2,20); }
       n1 = n2 * ans;
     } else if (op === '×') {
-      if (diff === 'easy')   { n1 = r(2,9);  n2 = r(2,9);  }
+      if (diff === 'easy')        { n1 = r(2,9);  n2 = r(2,9);  }
       else if (diff === 'medium') { n1 = r(3,25); n2 = r(3,25); }
-      else                   { n1 = r(12,50); n2 = r(12,50); }
+      else                        { n1 = r(12,50); n2 = r(12,50); }
       ans = n1 * n2;
     } else {
-      if (diff === 'easy')   { n1 = r(1,20);  n2 = r(1,20);  }
+      if (diff === 'easy')        { n1 = r(1,20);  n2 = r(1,20);  }
       else if (diff === 'medium') { n1 = r(10,99);  n2 = r(10,99);  }
-      else                   { n1 = r(50,500); n2 = r(50,500); }
-      if (op === '-' && n2 > n1) { [n1, n2] = [n2, n1]; }
+      else                        { n1 = r(50,500); n2 = r(50,500); }
+      if (op === '-' && n2 > n1)  { [n1, n2] = [n2, n1]; }
       ans = op === '+' ? n1 + n2 : n1 - n2;
     }
 
@@ -465,22 +457,18 @@ export class AppService {
 
   // ─── Numpad input ─────────────────────────────────────────────────────────
 
-  /** Append digit from numpad press */
   pressDigit(d: string): void {
     if (this.isTransitioning()) return;
     const cur = this.currentInput();
-    if (cur.length >= 7) return; // max 7 digits
+    if (cur.length >= 7) return;
     this.currentInput.set(cur + d);
   }
 
-  /** Backspace on numpad */
   pressBackspace(): void {
     if (this.isTransitioning()) return;
-    const cur = this.currentInput();
-    this.currentInput.set(cur.slice(0, -1));
+    this.currentInput.set(this.currentInput().slice(0, -1));
   }
 
-  /** Clear numpad input */
   pressClear(): void {
     if (this.isTransitioning()) return;
     this.currentInput.set('');
@@ -499,8 +487,8 @@ export class AppService {
     this.isTransitioning.set(true);
 
     const responseMs = Date.now() - this.problemStartMs;
-    const userAns = parseInt(input, 10);
-    const correct = userAns === problem.answer;
+    const userAns    = parseInt(input, 10);
+    const correct    = userAns === problem.answer;
 
     this.sessionTotal.update(n => n + 1);
 
@@ -519,6 +507,7 @@ export class AppService {
         this.playSound('streak');
       }
     } else {
+      this.sessionWrong.update(n => n + 1);   // ensure wrong increments
       this.streak.set(0);
       this.feedback.set('wrong');
       this.playSound('wrong');
@@ -535,8 +524,9 @@ export class AppService {
       }
     }
 
-    // auto-advance after short delay — no slide animation, just swap
-    setTimeout(() => this.nextProblem(), 100);
+    // Wrong answers wait a bit longer so user sees the feedback
+    const delay = correct ? 100 : 250;
+    setTimeout(() => this.nextProblem(), delay);
   }
 
   endGame(): void {
@@ -550,22 +540,33 @@ export class AppService {
     this.stopTimer();
     this.timeLeft.set(PROBLEM_TIME);
     this.timerHandle = setInterval(async () => {
+      if (this.isPaused()) return; // don't tick while paused
       this.timeLeft.update(t => t - 1);
       if (this.timeLeft() <= 0) {
-        // time's up → wrong, advance
         this.stopTimer();
         this.isTransitioning.set(true);
         this.sessionTotal.update(n => n + 1);
-        this.sessionWrong.update(n => n + 1);
-        this.streak.set(0);
-        this.feedback.set('wrong');
-        this.playSound('wrong');
-        if (!this.isGuest()) {
-          await this.persistStats(PROBLEM_TIME * 1000, false);
+
+        const hadInput = !!this.currentInput();
+        if (hadInput) {
+          // User typed something but time ran out → wrong
+          this.sessionWrong.update(n => n + 1);
+          this.streak.set(0);
+          this.feedback.set('wrong');
+          this.playSound('wrong');
+          if (!this.isGuest()) {
+            await this.persistStats(PROBLEM_TIME * 1000, false);
+          } else {
+            this.updateGuest(false, 0);
+          }
         } else {
-          this.updateGuest(false, 0);
+          // User typed nothing → skip (not counted as wrong, no streak reset)
+          this.sessionSkipped.update(n => n + 1);
+          this.feedback.set('wrong'); // visual flash still shows
+          this.playSound('wrong');
         }
-        setTimeout(() => this.nextProblem(), 100);
+
+        setTimeout(() => this.nextProblem(), 400);
       }
     }, 1000);
   }
@@ -575,6 +576,124 @@ export class AppService {
       clearInterval(this.timerHandle);
       this.timerHandle = null;
     }
+  }
+
+  // ─── Pause / Resume / Save ────────────────────────────────────────────────
+
+  /** Toggle pause state */
+  togglePause(): void {
+    if (this.isPaused()) {
+      this.isPaused.set(false);
+      // Re-start timer from remaining timeLeft (don't reset to PROBLEM_TIME)
+      this.stopTimer();
+      this.timerHandle = setInterval(async () => {
+        if (this.isPaused()) return;
+        this.timeLeft.update(t => t - 1);
+        if (this.timeLeft() <= 0) {
+          this.stopTimer();
+          this.isTransitioning.set(true);
+          this.sessionTotal.update(n => n + 1);
+
+          const hadInput = !!this.currentInput();
+          if (hadInput) {
+            this.sessionWrong.update(n => n + 1);
+            this.streak.set(0);
+            this.feedback.set('wrong');
+            this.playSound('wrong');
+            if (!this.isGuest()) {
+              await this.persistStats(PROBLEM_TIME * 1000, false);
+            } else {
+              this.updateGuest(false, 0);
+            }
+          } else {
+            this.sessionSkipped.update(n => n + 1);
+            this.feedback.set('wrong');
+            this.playSound('wrong');
+          }
+          setTimeout(() => this.nextProblem(), 400);
+        }
+      }, 1000);
+    } else {
+      this.isPaused.set(true);
+      this.stopTimer();
+    }
+  }
+
+  /** Pause + save current game state to localStorage */
+  pauseAndSave(): void {
+    if (this.currentScreen() !== 'game') return;
+    this.isPaused.set(true);
+    this.stopTimer();
+    const state: SavedGameState = {
+      sessionCorrect:    this.sessionCorrect(),
+      sessionWrong:      this.sessionWrong(),
+      sessionSkipped:    this.sessionSkipped(),
+      sessionTotal:      this.sessionTotal(),
+      sessionXP:         this.sessionXP(),
+      sessionBestStreak: this.sessionBestStreak(),
+      streak:            this.streak(),
+      currentProblem:    this.currentProblem()!,
+      timeLeft:          this.timeLeft(),
+    };
+    localStorage.setItem(SAVED_GAME_KEY, JSON.stringify(state));
+    this.hasSavedGame.set(true);
+  }
+
+  /** Restore a saved game and resume from where the user left off */
+  resumeGame(): void {
+    const raw = localStorage.getItem(SAVED_GAME_KEY);
+    if (!raw) return;
+    try {
+      const s: SavedGameState = JSON.parse(raw);
+      this.sessionCorrect.set(s.sessionCorrect ?? 0);
+      this.sessionWrong.set(s.sessionWrong ?? 0);
+      this.sessionSkipped.set(s.sessionSkipped ?? 0);
+      this.sessionTotal.set(s.sessionTotal ?? 0);
+      this.sessionXP.set(s.sessionXP ?? 0);
+      this.sessionBestStreak.set(s.sessionBestStreak ?? 0);
+      this.streak.set(s.streak ?? 0);
+      this.currentProblem.set(s.currentProblem ?? null);
+      this.timeLeft.set(s.timeLeft ?? PROBLEM_TIME);
+      this.currentInput.set('');
+      this.feedback.set(null);
+      this.isTransitioning.set(false);
+      this.isPaused.set(false);
+      this.currentScreen.set('game');
+      // Start timer ticking from saved timeLeft
+      this.stopTimer();
+      this.timerHandle = setInterval(async () => {
+        if (this.isPaused()) return;
+        this.timeLeft.update(t => t - 1);
+        if (this.timeLeft() <= 0) {
+          this.stopTimer();
+          this.isTransitioning.set(true);
+          this.sessionTotal.update(n => n + 1);
+          const hadInput = !!this.currentInput();
+          if (hadInput) {
+            this.sessionWrong.update(n => n + 1);
+            this.streak.set(0);
+            this.feedback.set('wrong');
+            this.playSound('wrong');
+            if (!this.isGuest()) await this.persistStats(PROBLEM_TIME * 1000, false);
+            else this.updateGuest(false, 0);
+          } else {
+            this.sessionSkipped.update(n => n + 1);
+            this.feedback.set('wrong');
+            this.playSound('wrong');
+          }
+          setTimeout(() => this.nextProblem(), 400);
+        }
+      }, 1000);
+    } catch {
+      // Corrupt state → fresh game
+      this.startGame();
+    }
+  }
+
+  /** Remove saved game from localStorage */
+  clearSavedGame(): void {
+    localStorage.removeItem(SAVED_GAME_KEY);
+    this.hasSavedGame.set(false);
   }
 
   // ─── Guest ────────────────────────────────────────────────────────────────
@@ -642,19 +761,19 @@ export class AppService {
   playSound(type: 'correct' | 'wrong' | 'streak'): void {
     try {
       const ctx = this.getCtx();
-      if (type === 'correct')      this.beep(ctx, 880, 'sine',     0,    0.08, 0.1);
-      else if (type === 'wrong')   this.beep(ctx, 220, 'sawtooth', 0,    0.1,  0.15);
+      if (type === 'correct')    this.beep(ctx, 880,  'sine',     0,    0.08, 0.1);
+      else if (type === 'wrong') this.beep(ctx, 220,  'sawtooth', 0,    0.1,  0.15);
       else {
-        this.beep(ctx, 660, 'sine', 0, 0.08, 0.1);
-        this.beep(ctx, 880, 'sine', 0.11, 0.08, 0.1);
-        this.beep(ctx, 1100,'sine', 0.22, 0.12, 0.15);
+        this.beep(ctx, 660,  'sine', 0,    0.08, 0.1);
+        this.beep(ctx, 880,  'sine', 0.11, 0.08, 0.1);
+        this.beep(ctx, 1100, 'sine', 0.22, 0.12, 0.15);
       }
     } catch { /* ignore */ }
   }
 
   private beep(ctx: AudioContext, freq: number, type: OscillatorType, start: number, gain: number, dur: number): void {
     const osc = ctx.createOscillator();
-    const g = ctx.createGain();
+    const g   = ctx.createGain();
     osc.connect(g); g.connect(ctx.destination);
     osc.type = type;
     osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
@@ -671,7 +790,7 @@ export class AppService {
     canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:9999;';
     canvas.width = window.innerWidth; canvas.height = window.innerHeight;
     document.body.appendChild(canvas);
-    const ctx = canvas.getContext('2d')!;
+    const ctx  = canvas.getContext('2d')!;
     const cols = ['#e8c547','#a8d8a8','#f4a261','#e76f51','#90e0ef','#caf0f8'];
     const parts = Array.from({ length: 100 }, () => ({
       x: Math.random() * canvas.width, y: -10,
@@ -696,7 +815,6 @@ export class AppService {
   // ─── Theme ────────────────────────────────────────────────────────────────
 
   private loadThemePref(): void {
-    // default dark (blackboard). Only load if user previously set light.
     const p = localStorage.getItem('mathozz_theme');
     if (p === 'light') this.isDarkMode.set(false);
     else this.isDarkMode.set(true);
@@ -719,36 +837,62 @@ export class AppService {
     await this.fetchLeaderboard(s);
   }
 
+  // ─── Feedback (Firestore) ─────────────────────────────────────────────────
+  // Uses 'problem-reports' collection which already has `allow create: if true`
+  // so both guests and logged-in users can submit without permission errors.
+
+  async submitFeedback(data: { text: string; email?: string; phone?: string }): Promise<void> {
+    if (!data.text || typeof data.text !== 'string') throw new Error('Invalid feedback');
+    const sanitized = data.text.trim();
+    if (sanitized.length === 0 || sanitized.length > 600) throw new Error('Invalid feedback length');
+
+    try {
+      // Store in problem-reports (public create access) with a 'type' field
+      // to distinguish from actual problem reports
+      const docRef = doc(collection(firebaseDb, 'problem-reports'));
+      await setDoc(docRef, {
+        type:        'user-feedback',          // distinguish from bug reports
+        description: sanitized,
+        email:       (data.email ?? '').trim().substring(0, 200),
+        phone:       (data.phone ?? '').trim().substring(0, 20),
+        uid:         this.user()?.uid ?? 'guest',
+        userEmail:   this.user()?.email ?? null,
+        userId:      this.user()?.uid ?? null,
+        userAgent:   navigator.userAgent.substring(0, 256),
+        screen:      this.currentScreen(),
+        timestamp:   serverTimestamp(),
+        resolved:    false,
+      });
+    } catch (e) {
+      console.error('Feedback submit error:', e);
+      throw e;
+    }
+  }
+
   // ─── Problem Reports ──────────────────────────────────────────────────────
 
   async submitProblemReport(description: string): Promise<void> {
-    // Validate and sanitize input
     if (!description || typeof description !== 'string') return;
-    
     const sanitized = description.trim();
-    
-    // Enforce max length
     if (sanitized.length === 0 || sanitized.length > 500) return;
-    
-    // Prevent excessive parsing/encoding attacks
+
     const report: Omit<ProblemReport, 'id'> = {
-      userId: this.user()?.uid || null,
+      userId:    this.user()?.uid || null,
       userEmail: this.user()?.email || null,
-      userAgent: navigator.userAgent.substring(0, 256), // Limit UA string
+      userAgent: navigator.userAgent.substring(0, 256),
       description: sanitized,
       timestamp: serverTimestamp() as Timestamp,
-      resolved: false,
-      screen: this.currentScreen(),
+      resolved:  false,
+      screen:    this.currentScreen(),
       ...(this.currentScreen() === 'game' && {
         gameState: {
           currentProblem: this.currentProblem() || undefined,
-          score: this.sessionCorrect(),
-          streak: this.streak(),
+          score:      this.sessionCorrect(),
+          streak:     this.streak(),
           difficulty: this.difficulty()
         }
       })
     };
-
 
     const docRef = doc(collection(firebaseDb, 'problem-reports'));
     await setDoc(docRef, report);
@@ -761,10 +905,7 @@ export class AppService {
       limit(100)
     );
     const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as ProblemReport));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ProblemReport));
   }
 
   async markReportResolved(reportId: string): Promise<void> {

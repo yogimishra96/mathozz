@@ -1,10 +1,11 @@
 import {
-  Component, inject, signal,
+  Component, inject, signal, computed,
   ChangeDetectionStrategy, OnInit, OnDestroy,
 } from '@angular/core';
 import { RouterOutlet, Router, NavigationEnd } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { filter } from 'rxjs/operators';
+
 import { AppService } from './app.service';
 
 @Component({
@@ -23,13 +24,23 @@ import { AppService } from './app.service';
       </div>
     }
 
-    <!-- ── Logout confirm sheet (both desktop + mobile) ── -->
+    <!-- Toast -->
+    @if (showToast()) {
+      <div class="toast-wrap">
+        <div class="toast">
+          <i class="fa-solid fa-check-circle"></i>
+          <span>{{ toastMessage() }}</span>
+        </div>
+      </div>
+    }
+
+    <!-- ── Logout confirm ── -->
     @if (showLogoutConfirm()) {
       <div class="logout-overlay" (click)="showLogoutConfirm.set(false)">
         <div class="logout-sheet" (click)="$event.stopPropagation()">
-          <div class="logout-sheet-title">Sign out?</div>
-          <div class="logout-sheet-sub">You'll need to sign in again to access your stats.</div>
-          <div class="logout-sheet-btns">
+          <div class="sheet-title">Sign out?</div>
+          <div class="sheet-sub">You'll need to sign in again to access your stats.</div>
+          <div class="sheet-btns">
             <button class="btn btn-danger btn-lg" style="flex:1" (click)="confirmLogout()">
               <i class="fa-solid fa-right-from-bracket"></i> Yes, Sign Out
             </button>
@@ -41,68 +52,125 @@ import { AppService } from './app.service';
       </div>
     }
 
-    <!-- ── Report Problem Modal ── -->
-    @if (showReportModal()) {
-      <div class="report-overlay" (click)="showReportModal.set(false)">
-        <div class="report-sheet" (click)="$event.stopPropagation()">
-          <div class="report-sheet-title">Report a Problem</div>
-          <div class="report-sheet-sub">Help us improve by reporting any issues you encounter.</div>
-          <textarea
-            class="report-textarea"
-            [(ngModel)]="reportText"
-            placeholder="Describe the problem you're experiencing..."
-            rows="4"
-            maxlength="500"></textarea>
-          <div class="report-sheet-btns">
-            <button class="btn btn-outline btn-lg" style="flex:1" (click)="showReportModal.set(false)">
-              Cancel
-            </button>
-            <button class="btn btn-primary btn-lg" style="flex:1" (click)="submitReport()" [disabled]="!reportText.trim()">
-              <i class="fa-solid fa-paper-plane"></i> Submit Report
+    <!-- ── Submit Feedback Modal ── -->
+    @if (showFeedbackModal()) {
+      <div class="feedback-modal-overlay" (click)="showFeedbackModal.set(false)">
+        <div class="feedback-sheet" (click)="$event.stopPropagation()">
+          <div class="sheet-title">Submit Feedback</div>
+          <div class="sheet-sub">Help us improve. Contact details are optional.</div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Mobile <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+              <input class="form-input" type="tel" placeholder="+91 98765 43210"
+                [(ngModel)]="feedbackPhone" autocomplete="tel"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Email <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+              <input class="form-input" type="email" placeholder="you@example.com"
+                [(ngModel)]="feedbackEmail" autocomplete="email"/>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Feedback <span style="color:var(--wrong);font-weight:400;">*</span></label>
+            <textarea class="form-textarea" rows="4" maxlength="600"
+              placeholder="Tell us what you love, what's broken, or what you'd like to see..."
+              [(ngModel)]="feedbackText"></textarea>
+            <span class="form-hint">{{ feedbackText.length }}/600</span>
+          </div>
+
+          <div class="sheet-btns">
+            <button class="btn btn-outline btn-lg" style="flex:1" (click)="showFeedbackModal.set(false)">Cancel</button>
+            <button class="btn btn-primary btn-lg" style="flex:1"
+              (click)="submitFeedback()"
+              [disabled]="!feedbackText.trim() || isSendingFeedback()">
+              @if (isSendingFeedback()) { <i class="fa-solid fa-spinner fa-spin"></i> Sending… }
+              @else { <i class="fa-solid fa-paper-plane"></i> Send }
             </button>
           </div>
         </div>
       </div>
     }
 
-    <!-- Main App Screens (hidden on admin routes) -->
     @if (!isAdminRoute()) {
-      <!-- ══════════════════════════════════════════
-           GAME SCREEN
-      ══════════════════════════════════════════ -->
+
+    <!-- ══════════════════════════════════════════
+         GAME SCREEN
+    ══════════════════════════════════════════ -->
     @if (svc.currentScreen() === 'game') {
       <div class="game-wrap screen" (click)="gameWrapClick($event)">
 
+        <!-- Header: Logo | Stats | Actions -->
         <div class="game-header">
-          <span class="gh-logo" (click)="svc.currentScreen.set('home')">Mathozz</span>
+          <span class="gh-logo" (click)="resumeAndGo('home')">Mathozz</span>
+
           <div class="gh-stats">
             <div class="ghs-item">
-              <div class="ghs-label">Correct</div>
+              <div class="ghs-label">✓</div>
               <div class="ghs-val correct">{{ svc.sessionCorrect() }}</div>
             </div>
             <div class="ghs-item">
-              <div class="ghs-label">Wrong</div>
+              <div class="ghs-label">✗</div>
               <div class="ghs-val wrong">{{ svc.sessionWrong() }}</div>
             </div>
             <div class="ghs-item">
-              <div class="ghs-label">Streak</div>
+              <div class="ghs-label">Skip</div>
+              <div class="ghs-val skipped">{{ svc.sessionSkipped() }}</div>
+            </div>
+            <div class="ghs-item">
+              <div class="ghs-label">🔥</div>
               <div class="ghs-val streak">{{ svc.streak() }}</div>
             </div>
           </div>
-          <button class="gh-back" (click)="svc.endGame()">
-            <i class="fa-solid fa-stop"></i>
-          </button>
+
+          <!-- Right action buttons -->
+          <div class="gh-actions">
+            <!-- PWA Install (shown only when installable) -->
+            @if (pwaInstallable()) {
+              <button class="gh-icon-btn install" title="Install App" (click)="installPwa()">
+                <i class="fa-solid fa-download"></i>
+              </button>
+            }
+            <!-- Feedback -->
+            <button class="gh-icon-btn" title="Submit Feedback" (click)="openFeedback()">
+              <i class="fa-regular fa-comment-dots"></i>
+            </button>
+            <!-- Pause / Resume -->
+            <button class="gh-icon-btn" [title]="svc.isPaused() ? 'Resume' : 'Pause'"
+              (click)="togglePause()">
+              <i class="fa-solid" [class.fa-pause]="!svc.isPaused()" [class.fa-play]="svc.isPaused()"></i>
+            </button>
+            <!-- End game -->
+            <button class="gh-icon-btn danger" title="End game" (click)="svc.endGame()">
+              <i class="fa-solid fa-stop"></i>
+            </button>
+          </div>
         </div>
 
+        <!-- Timer bar -->
         <div class="timer-bar">
           <div class="timer-fill"
             [class.warn]="svc.timeLeft() <= 8 && svc.timeLeft() > 4"
             [class.danger]="svc.timeLeft() <= 4"
+            [class.paused]="svc.isPaused()"
             [style.width.%]="(svc.timeLeft() / 15) * 100">
           </div>
         </div>
 
+        <!-- Problem -->
         <div class="problem-zone">
+          <!-- Paused overlay -->
+          @if (svc.isPaused()) {
+            <div class="paused-overlay">
+              <div class="paused-label">Paused</div>
+              <div class="paused-sub">Tap ▶ to resume</div>
+              <button class="btn btn-primary btn-lg" (click)="togglePause()">
+                <i class="fa-solid fa-play"></i> Resume
+              </button>
+            </div>
+          }
+
           <div class="diff-badge" [class]="svc.difficulty()">{{ svc.difficulty() }}</div>
           @if (svc.currentProblem(); as p) {
             <div class="problem-eq">
@@ -117,11 +185,12 @@ import { AppService } from './app.service';
           </div>
         </div>
 
+        <!-- Numpad -->
         <div class="numpad-zone">
           <div class="numpad-inner">
             <div class="nk-submit-wrap">
               <button class="nk-submit"
-                [disabled]="!svc.currentInput() || svc.isTransitioning()"
+                [disabled]="!svc.currentInput() || svc.isTransitioning() || svc.isPaused()"
                 (click)="nkClick('submit', undefined, $event.currentTarget)">
                 Submit &nbsp;→
               </button>
@@ -129,11 +198,14 @@ import { AppService } from './app.service';
             <div class="numpad-grid">
               @for (k of numpadKeys; track k) {
                 @if (k === 'CLR') {
-                  <button class="nk nk-action" (click)="nkClick('clear', undefined, $event.currentTarget)">CLR</button>
+                  <button class="nk nk-action" [disabled]="svc.isPaused()"
+                    (click)="nkClick('clear', undefined, $event.currentTarget)">CLR</button>
                 } @else if (k === '⌫') {
-                  <button class="nk nk-action" (click)="nkClick('backspace', undefined, $event.currentTarget)">⌫</button>
+                  <button class="nk nk-action" [disabled]="svc.isPaused()"
+                    (click)="nkClick('backspace', undefined, $event.currentTarget)">⌫</button>
                 } @else {
-                  <button class="nk" (click)="nkClick('digit', k, $event.currentTarget)">{{ k }}</button>
+                  <button class="nk" [disabled]="svc.isPaused()"
+                    (click)="nkClick('digit', k, $event.currentTarget)">{{ k }}</button>
                 }
               }
             </div>
@@ -143,7 +215,9 @@ import { AppService } from './app.service';
         @if (svc.isGuest()) {
           <div class="guest-strip">
             <span class="gs-label">{{ Math.max(0, 50 - svc.guestSolvedCount()) }} free problems left</span>
-            <div class="gs-track"><div class="gs-fill" [style.width.%]="Math.min((svc.guestSolvedCount()/50)*100, 100)"></div></div>
+            <div class="gs-track">
+              <div class="gs-fill" [style.width.%]="Math.min((svc.guestSolvedCount()/50)*100,100)"></div>
+            </div>
           </div>
         }
       </div>
@@ -154,15 +228,14 @@ import { AppService } from './app.service';
     ══════════════════════════════════════════ -->
     @if (svc.currentScreen() === 'home') {
       <div class="screen shell">
-        <!-- Desktop sidebar -->
         <aside class="sidebar">
           <div class="sb-top">
-            <div class="sb-brand">Mathozz</div>
+            <div class="sb-brand" (click)="svc.currentScreen.set('home')">Mathozz</div>
             <div class="sb-tagline">Think fast.</div>
           </div>
           <nav class="sb-nav">
             <button class="ni active"><i class="fa-solid fa-house"></i><span>Dashboard</span></button>
-            <button class="ni" (click)="svc.startGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
+            <button class="ni" (click)="startFreshGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
             <div class="sb-div"></div>
             @if (!svc.isGuest()) {
               <button class="ni" (click)="svc.currentScreen.set('profile')"><i class="fa-solid fa-user"></i><span>Profile</span></button>
@@ -186,13 +259,13 @@ import { AppService } from './app.service';
         <main class="main">
           <div class="topbar">
             <div class="tb-logo" (click)="svc.currentScreen.set('home')">Mathozz</div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              @if (!svc.isGuest()) {
-                <span class="tb-user">{{ svc.user()!.displayName }}</span>
-              }
-            </div>
+            @if (!svc.isGuest()) {
+              <span class="tb-user">{{ svc.user()!.displayName }}</span>
+            }
           </div>
+
           <div class="home-content">
+            <!-- Hero: no "Play Again" button, only Start Game -->
             <div class="hero-card">
               <div class="hero-eyebrow">{{ svc.isGuest() ? 'Guest Mode' : 'Welcome back' }}</div>
               <div class="hero-title">{{ svc.isGuest() ? 'Ready to train?' : 'Keep going.' }}</div>
@@ -201,8 +274,14 @@ import { AppService } from './app.service';
                 @else { {{ svc.user()!.totalSolved }} solved · {{ svc.user()!.accuracy }}% accuracy }
               </div>
               <div class="hero-btns">
-                <button class="btn btn-primary btn-lg" (click)="svc.startGame()">
-                  <i class="fa-solid fa-play"></i> Start Game
+                <!-- Resume button if game was paused/saved -->
+                @if (svc.hasSavedGame()) {
+                  <button class="btn btn-outline btn-lg" (click)="resumeSavedGame()">
+                    <i class="fa-solid fa-play"></i> Resume Game
+                  </button>
+                }
+                <button class="btn btn-primary btn-lg" (click)="startFreshGame()">
+                  <i class="fa-solid fa-plus"></i> New Game
                 </button>
               </div>
             </div>
@@ -210,8 +289,13 @@ import { AppService } from './app.service';
             @if (svc.isGuest()) {
               <div class="guest-banner">
                 <div class="gp">
-                  <div class="gp-lbl"><span>Guest Progress</span><span>{{ Math.min(svc.guestSolvedCount(), 50) }} / 50</span></div>
-                  <div class="prog-track"><div class="prog-fill" [style.width.%]="Math.min((svc.guestSolvedCount()/50)*100, 100)"></div></div>
+                  <div class="gp-lbl">
+                    <span>Guest Progress</span>
+                    <span>{{ Math.min(svc.guestSolvedCount(), 50) }} / 50</span>
+                  </div>
+                  <div class="prog-track">
+                    <div class="prog-fill" [style.width.%]="Math.min((svc.guestSolvedCount()/50)*100,100)"></div>
+                  </div>
                 </div>
                 <button class="btn btn-primary btn-sm" (click)="svc.currentScreen.set('login')">Sign Up</button>
               </div>
@@ -220,10 +304,10 @@ import { AppService } from './app.service';
             @if (!svc.isGuest()) {
               <div>
                 <div class="section-hd">Your Numbers</div>
-                <div style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;padding:0 4px;">
-                  <div style="margin-bottom:6px;"><strong>Top Session:</strong> Total correct answers in your best single game</div>
-                  <div><strong>Best Streak:</strong> Longest chain of consecutive correct answers (no mistakes in between)</div>
-                </div>
+                <p class="stat-explain">
+                  <strong>Top Session:</strong> Most correct in one game.&nbsp;&nbsp;
+                  <strong>Best Streak:</strong> Longest consecutive correct run.
+                </p>
                 <div class="stats-grid">
                   <div class="sc"><div class="sc-lbl">Total Solved</div><div class="sc-val">{{ svc.user()!.totalSolved }}</div></div>
                   <div class="sc"><div class="sc-lbl">Accuracy</div><div class="sc-val">{{ svc.user()!.accuracy }}%</div></div>
@@ -231,17 +315,15 @@ import { AppService } from './app.service';
                   <div class="sc"><div class="sc-lbl">Best Streak</div><div class="sc-val c-streak">{{ svc.user()!.bestStreak }}</div></div>
                 </div>
               </div>
-           
             }
           </div>
         </main>
       </div>
 
-      <!-- Mobile bottom nav -->
       <nav class="mobile-nav">
         <div class="mob-nav-inner">
           <button class="mob-ni active"><i class="fa-solid fa-house"></i><span>Home</span></button>
-          <button class="mob-ni" (click)="svc.startGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
+          <button class="mob-ni" (click)="startFreshGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
           @if (!svc.isGuest()) {
             <button class="mob-ni" (click)="svc.currentScreen.set('profile')"><i class="fa-solid fa-user"></i><span>Profile</span></button>
             <button class="mob-ni mob-logout" (click)="showLogoutConfirm.set(true)"><i class="fa-solid fa-right-from-bracket"></i><span>Sign Out</span></button>
@@ -262,10 +344,10 @@ import { AppService } from './app.service';
     @if (svc.currentScreen() === 'result') {
       <div class="screen shell">
         <aside class="sidebar">
-          <div class="sb-top"><div class="sb-brand">Mathozz</div><div class="sb-tagline">Think fast.</div></div>
+          <div class="sb-top"><div class="sb-brand" (click)="svc.currentScreen.set('home')">Mathozz</div><div class="sb-tagline">Think fast.</div></div>
           <nav class="sb-nav">
             <button class="ni" (click)="svc.currentScreen.set('home')"><i class="fa-solid fa-house"></i><span>Dashboard</span></button>
-            <button class="ni" (click)="svc.startGame()"><i class="fa-solid fa-rotate-right"></i><span>Play Again</span></button>
+            <button class="ni" (click)="startFreshGame()"><i class="fa-solid fa-rotate-right"></i><span>Play Again</span></button>
           </nav>
         </aside>
         <main class="main">
@@ -285,11 +367,15 @@ import { AppService } from './app.service';
                 <div class="result-big-lbl">Correct</div>
               </div>
             </div>
+
+            <!-- 4 stats: correct, wrong, skipped, streak -->
             <div class="result-stats">
-              <div class="rsc"><div class="rsc-val">{{ svc.sessionWrong() }}</div><div class="rsc-lbl">Wrong</div></div>
+              <div class="rsc"><div class="rsc-val" style="color:var(--wrong)">{{ svc.sessionWrong() }}</div><div class="rsc-lbl">Wrong</div></div>
+              <div class="rsc"><div class="rsc-val c-skipped">{{ svc.sessionSkipped() }}</div><div class="rsc-lbl">Skipped</div></div>
               <div class="rsc"><div class="rsc-val c-streak">{{ svc.sessionBestStreak() }}</div><div class="rsc-lbl">Best Streak</div></div>
               <div class="rsc"><div class="rsc-val">{{ svc.sessionAccuracy() }}<span style="font-size:0.9rem;opacity:0.4;">%</span></div><div class="rsc-lbl">Accuracy</div></div>
             </div>
+
             @if (svc.isGuest()) {
               <div class="result-guest-card">
                 <div class="rgc-body">
@@ -299,9 +385,17 @@ import { AppService } from './app.service';
                 <button class="btn btn-primary" (click)="svc.currentScreen.set('login')">Sign Up</button>
               </div>
             }
+
             <div class="result-btns">
-              <button class="btn btn-primary btn-lg" (click)="svc.startGame()"><i class="fa-solid fa-rotate-right"></i> Play Again</button>
-              <button class="btn btn-outline btn-lg" (click)="svc.currentScreen.set('home')"><i class="fa-solid fa-house"></i> Dashboard</button>
+              <button class="btn btn-primary btn-lg" (click)="startFreshGame()">
+                <i class="fa-solid fa-rotate-right"></i> Play Again
+              </button>
+              <button class="btn btn-outline btn-lg" (click)="svc.currentScreen.set('home')">
+                <i class="fa-solid fa-house"></i> Dashboard
+              </button>
+              <button class="btn btn-ghost btn-lg" (click)="openFeedback()">
+                <i class="fa-regular fa-comment-dots"></i> Feedback
+              </button>
             </div>
           </div>
         </main>
@@ -310,7 +404,8 @@ import { AppService } from './app.service';
       <nav class="mobile-nav">
         <div class="mob-nav-inner">
           <button class="mob-ni" (click)="svc.currentScreen.set('home')"><i class="fa-solid fa-house"></i><span>Home</span></button>
-          <button class="mob-ni active" (click)="svc.startGame()"><i class="fa-solid fa-rotate-right"></i><span>Play Again</span></button>
+          <button class="mob-ni active" (click)="startFreshGame()"><i class="fa-solid fa-rotate-right"></i><span>Play Again</span></button>
+          <button class="mob-ni" (click)="openFeedback()"><i class="fa-regular fa-comment-dots"></i><span>Feedback</span></button>
         </div>
       </nav>
     }
@@ -395,7 +490,7 @@ import { AppService } from './app.service';
           <div class="sb-top"><div class="sb-brand" (click)="svc.currentScreen.set('home')">Mathozz</div><div class="sb-tagline">Think fast.</div></div>
           <nav class="sb-nav">
             <button class="ni" (click)="svc.currentScreen.set('home')"><i class="fa-solid fa-house"></i><span>Dashboard</span></button>
-            <button class="ni" (click)="svc.startGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
+            <button class="ni" (click)="startFreshGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
             <div class="sb-div"></div>
             <button class="ni active"><i class="fa-solid fa-user"></i><span>Profile</span></button>
           </nav>
@@ -410,12 +505,17 @@ import { AppService } from './app.service';
           </div>
         </aside>
         <main class="main">
-          <div class="topbar"><div class="tb-logo" (click)="svc.currentScreen.set('home')">Mathozz</div></div>
+          <div class="topbar">
+            <div class="tb-logo" (click)="svc.currentScreen.set('home')">Mathozz</div>
+            <button class="btn btn-ghost btn-sm" (click)="openFeedback()">
+              <i class="fa-regular fa-comment-dots"></i> Feedback
+            </button>
+          </div>
           @if (svc.user(); as u) {
             <div class="profile-content">
               <div class="profile-hero">
                 @if (u.photoURL) {
-                  <img class="pav pav-photo" [src]="u.photoURL" [alt]="u.displayName" />
+                  <img class="pav pav-photo" [src]="u.photoURL" [alt]="u.displayName"/>
                 } @else {
                   <div class="pav" [style.background]="avatarColor(u.displayName)">
                     {{ u.displayName.charAt(0).toUpperCase() }}
@@ -429,19 +529,21 @@ import { AppService } from './app.service';
                   </div>
                 </div>
               </div>
+
               <div>
                 <div class="section-hd">Statistics</div>
-                <div style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;padding:0 4px;">
-                  <div style="margin-bottom:6px;"><strong>Top Session:</strong> Total correct answers in your best single game</div>
-                  <div><strong>Best Streak:</strong> Longest chain of consecutive correct answers (no mistakes in between)</div>
-                </div>
+                <p class="stat-explain">
+                  <strong>Top Session:</strong> Most correct in one game.&nbsp;&nbsp;
+                  <strong>Best Streak:</strong> Longest consecutive correct run.
+                </p>
                 <div class="stats-grid">
                   <div class="sc"><div class="sc-lbl">Total Solved</div><div class="sc-val">{{ u.totalSolved }}</div></div>
                   <div class="sc"><div class="sc-lbl">Accuracy</div><div class="sc-val">{{ u.accuracy }}%</div></div>
-                  <div class="sc" title="How many you got right overall in your best game"><div class="sc-lbl">Top Session</div><div class="sc-val c-correct">{{ u.topSession }}</div></div>
-                  <div class="sc" title="What's the most you got right in a row, ever"><div class="sc-lbl">Best Streak</div><div class="sc-val c-streak">{{ u.bestStreak }}</div></div>
+                  <div class="sc" title="Total correct in best single game"><div class="sc-lbl">Top Session</div><div class="sc-val c-correct">{{ u.topSession }}</div></div>
+                  <div class="sc" title="Longest streak of right answers ever"><div class="sc-lbl">Best Streak</div><div class="sc-val c-streak">{{ u.bestStreak }}</div></div>
                 </div>
               </div>
+
               @if (u.badges.length > 0) {
                 <div>
                   <div class="section-hd">Badges</div>
@@ -452,9 +554,6 @@ import { AppService } from './app.service';
                   </div>
                 </div>
               }
-              <button class="gh-report" (click)="showReportModal.set(true)">
-                <i class="fa-solid fa-flag"></i> Report
-              </button>
             </div>
           }
         </main>
@@ -463,7 +562,7 @@ import { AppService } from './app.service';
       <nav class="mobile-nav">
         <div class="mob-nav-inner">
           <button class="mob-ni" (click)="svc.currentScreen.set('home')"><i class="fa-solid fa-house"></i><span>Home</span></button>
-          <button class="mob-ni" (click)="svc.startGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
+          <button class="mob-ni" (click)="startFreshGame()"><i class="fa-solid fa-play"></i><span>Play</span></button>
           <button class="mob-ni active"><i class="fa-solid fa-user"></i><span>Profile</span></button>
           <button class="mob-ni mob-logout" (click)="showLogoutConfirm.set(true)"><i class="fa-solid fa-right-from-bracket"></i><span>Sign Out</span></button>
           <button class="mob-ni" (click)="svc.toggleDarkMode()">
@@ -473,60 +572,90 @@ import { AppService } from './app.service';
         </div>
       </nav>
     }
-    } <!-- End Main App Screens conditional -->
 
-    <!-- ── Toast Notification ── -->
-    @if (showToast()) {
-      <div class="toast-overlay" (click)="showToast.set(false)">
-        <div class="toast" (click)="$event.stopPropagation()">
-          <i class="fa-solid fa-check-circle"></i>
-          <span>{{ toastMessage() }}</span>
-        </div>
-      </div>
-    }
+    } <!-- end !isAdminRoute -->
 
-    <router-outlet></router-outlet>  `
+    <router-outlet></router-outlet>
+  `
 })
 export class AppComponent implements OnInit, OnDestroy {
-  readonly svc = inject(AppService);
-  private router = inject(Router);
+  readonly svc      = inject(AppService);
+  private router    = inject(Router);
 
+  // ── UI state ──
   loginTab          = signal<'login' | 'signup'>('login');
   showLogoutConfirm = signal(false);
-  showReportModal   = signal(false);
+  showFeedbackModal = signal(false);
   showToast         = signal(false);
   toastMessage      = signal('');
   isAdminRoute      = signal(false);
+  isSendingFeedback = signal(false);
+  pwaInstallable    = signal(false);
 
+  // ── Form fields ──
   loginEmail    = '';
   loginPassword = '';
   signupName    = '';
-  reportText    = '';
+  feedbackText  = '';
+  feedbackEmail = '';
+  feedbackPhone = '';
 
   readonly numpadKeys = ['1','2','3','4','5','6','7','8','9','CLR','0','⌫'];
-  readonly Math = Math;  // Expose Math for templates
+  readonly Math = Math;
 
-  private boundKeydown = this.onKeydown.bind(this);
+  private boundKeydown    = this.onKeydown.bind(this);
+  private deferredPrompt: BeforeInstallPromptEvent | null = null;
+  private pwaHandler      = (e: Event) => {
+    e.preventDefault();
+    this.deferredPrompt = e as BeforeInstallPromptEvent;
+    this.pwaInstallable.set(true);
+  };
 
   ngOnInit(): void {
     document.addEventListener('keydown', this.boundKeydown, true);
+    window.addEventListener('beforeinstallprompt', this.pwaHandler as EventListener);
 
-    // Listen for route changes to hide/show main app UI
-    this.router.events.pipe(
-      filter(event => event instanceof NavigationEnd)
-    ).subscribe((event: NavigationEnd) => {
-      this.isAdminRoute.set(event.url.includes('admin-reports-secret-2024'));
-    });
-
-    // Check initial route
+    this.router.events.pipe(filter(e => e instanceof NavigationEnd))
+      .subscribe((e: NavigationEnd) => {
+        this.isAdminRoute.set(e.url.includes('admin-reports-secret-2024'));
+      });
     this.isAdminRoute.set(this.router.url.includes('admin-reports-secret-2024'));
   }
+
   ngOnDestroy(): void {
     document.removeEventListener('keydown', this.boundKeydown, true);
+    window.removeEventListener('beforeinstallprompt', this.pwaHandler as EventListener);
   }
 
+  // ── Game controls ──────────────────────────────────────────────────────────
+
+  /** Start a completely fresh game (clears saved state) */
+  startFreshGame(): void {
+    this.svc.clearSavedGame();
+    this.svc.startGame();
+  }
+
+  /** Resume a saved game that was interrupted */
+  resumeSavedGame(): void {
+    this.svc.resumeGame();
+  }
+
+  /** When navigating away from game, auto-save state */
+  resumeAndGo(screen: string): void {
+    if (this.svc.currentScreen() === 'game') {
+      this.svc.pauseAndSave();
+    }
+    this.svc.currentScreen.set(screen as any);
+  }
+
+  togglePause(): void {
+    this.svc.togglePause();
+  }
+
+  /** Numpad button: blur immediately to prevent mobile keyboard, then act */
   nkClick(action: 'digit'|'clear'|'backspace'|'submit', value?: string, btn?: EventTarget|null): void {
     (btn as HTMLButtonElement)?.blur();
+    if (this.svc.isPaused()) return;
     if (this.svc.isTransitioning()) return;
     if      (action === 'digit' && value) this.svc.pressDigit(value);
     else if (action === 'clear')          this.svc.pressClear();
@@ -534,46 +663,38 @@ export class AppComponent implements OnInit, OnDestroy {
     else if (action === 'submit')         this.svc.submitAnswer();
   }
 
+  /** Blur any focus on non-button tap (prevents mobile keyboard) */
   gameWrapClick(e: Event): void {
     if ((e.target as HTMLElement).tagName !== 'BUTTON') {
       (document.activeElement as HTMLElement)?.blur();
     }
   }
 
+  /** Desktop keyboard — captured at document level */
   onKeydown(e: KeyboardEvent): void {
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
     if (this.svc.currentScreen() !== 'game') {
       if (e.key === 'Escape') this.svc.currentScreen.set('home');
       return;
     }
+    // Space = pause/resume
+    if (e.key === ' ') { e.preventDefault(); this.togglePause(); return; }
+    if (this.svc.isPaused()) return;
+
     if      (e.key >= '0' && e.key <= '9') { e.preventDefault(); this.svc.pressDigit(e.key); }
     else if (e.key === 'Backspace')         { e.preventDefault(); this.svc.pressBackspace(); }
     else if (e.key === 'Delete')            { e.preventDefault(); this.svc.pressClear(); }
     else if (e.key === 'Enter')             { e.preventDefault(); this.svc.submitAnswer(); }
-    else if (e.key === 'Escape')            { this.svc.endGame(); }
+    else if (e.key === 'Escape')            { this.svc.pauseAndSave(); this.svc.currentScreen.set('home'); }
   }
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
 
   async confirmLogout(): Promise<void> {
     this.showLogoutConfirm.set(false);
     await this.svc.logout();
-  }
-
-  async submitReport(): Promise<void> {
-    if (!this.reportText.trim()) return;
-    try {
-      await this.svc.submitProblemReport(this.reportText);
-      this.reportText = '';
-      this.showReportModal.set(false);
-      this.showToast.set(true);
-      this.toastMessage.set('Problem submitted successfully!');
-      setTimeout(() => this.showToast.set(false), 3000);
-    } catch (error) {
-      console.error('Failed to submit report:', error);
-      this.showToast.set(true);
-      this.toastMessage.set('Failed to submit report. Please try again.');
-      setTimeout(() => this.showToast.set(false), 3000);
-    }
   }
 
   async onAuthSubmit(): Promise<void> {
@@ -583,6 +704,58 @@ export class AppComponent implements OnInit, OnDestroy {
       await this.svc.signupWithEmail(this.loginEmail, this.loginPassword, this.signupName);
     }
   }
+
+  // ── Feedback ──────────────────────────────────────────────────────────────
+
+  openFeedback(): void {
+    this.feedbackText = '';
+    this.feedbackEmail = '';
+    this.feedbackPhone = '';
+    this.showFeedbackModal.set(true);
+  }
+
+  async submitFeedback(): Promise<void> {
+    if (!this.feedbackText.trim()) return;
+    this.isSendingFeedback.set(true);
+    try {
+      await this.svc.submitFeedback({
+        text:  this.feedbackText.trim(),
+        email: this.feedbackEmail.trim(),
+        phone: this.feedbackPhone.trim(),
+      });
+      this.showFeedbackModal.set(false);
+      this.feedbackText = '';
+      this.toast('Feedback sent — thank you! 🙏');
+    } catch {
+      this.toast('Failed to send. Please try again.');
+    } finally {
+      this.isSendingFeedback.set(false);
+    }
+  }
+
+  // ── PWA install ───────────────────────────────────────────────────────────
+
+  async installPwa(): Promise<void> {
+    if (!this.deferredPrompt) return;
+    this.deferredPrompt.prompt();
+    const { outcome } = await this.deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      this.pwaInstallable.set(false);
+      this.deferredPrompt = null;
+    }
+  }
+
+  // ── Toast helper ──────────────────────────────────────────────────────────
+
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  toast(msg: string): void {
+    this.toastMessage.set(msg);
+    this.showToast.set(true);
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => this.showToast.set(false), 3000);
+  }
+
+  // ── Result label ──────────────────────────────────────────────────────────
 
   resultLabel(): string {
     const c = this.svc.sessionCorrect();
@@ -605,4 +778,10 @@ export class AppComponent implements OnInit, OnDestroy {
   badgeName(b: string): string {
     return ({first_blood:'First Blood',streak_10:'Streak ×10',streak_25:'Streak ×25',speed_demon:'Speed Demon',century:'Century'} as Record<string,string>)[b] ?? b;
   }
+}
+
+// PWA type augment
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
