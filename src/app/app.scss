@@ -3,7 +3,7 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-:host {
+app-root {
   --bg:      #0e0f0d;
   --bg2:     #141510;
   --surface: #1a1c16;
@@ -23,7 +23,7 @@
   font-family: 'DM Sans', sans-serif;
   -webkit-font-smoothing: antialiased; user-select: none;
 }
-:host.theme-light {
+app-root.theme-light {
   --bg: #f4f5ef; --bg2: #eaece3; --surface: #ffffff;
   --border: #dde0d2; --border2: #c8ccb8;
   --text: #1a1c14; --text2: #4a5038; --muted: #8a9278; --accent: #4a8a00;
@@ -180,6 +180,27 @@
 .nk:active { background: var(--border2); }
 .nk.nk-action { font-family: 'DM Sans', sans-serif; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .nk.nk-action:hover { color: var(--text); }
+
+/* Desktop play: full-width keypad; submit via Enter (see PlayComponent.onKeydown) */
+@media (min-width: 701px) {
+  .numpad-inner {
+    max-width: none;
+    margin: 0;
+  }
+  .nk-submit-wrap {
+    display: none;
+  }
+  .numpad-grid {
+    gap: 1px;
+    padding: 0;
+    background: var(--border);
+    border-top: 1px solid var(--border);
+  }
+  .numpad-grid .nk {
+    border: none;
+    border-radius: 0;
+  }
+}
 
 /* Guest strip */
 .guest-strip { display: flex; align-items: center; gap: 10px; padding: 6px 20px 8px; background: var(--bg2); }
