@@ -173,7 +173,7 @@ export class ProfileComponent {
 
   go(path: string): void {
     if (path === '/login') {
-      this.svc.currentScreen.set('login');
+      void this.router.navigate(['/login']);
       return;
     }
     this.router.navigate([path]);

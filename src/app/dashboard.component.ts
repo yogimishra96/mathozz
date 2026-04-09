@@ -1,6 +1,6 @@
 import {
   Component, inject, signal,
-  ChangeDetectionStrategy, OnInit,
+  ChangeDetectionStrategy,
 } from '@angular/core';
 import { Router } from '@angular/router';
 import { AppService } from './app.service';
@@ -53,6 +53,9 @@ import { AppService } from './app.service';
             <div class="hero-title">{{ svc.isGuest() ? 'Ready to train?' : 'Keep going.' }}</div>
             <div class="hero-sub">
               @if (svc.isGuest()) { {{ Math.max(0, 50 - svc.guestSolvedCount()) }} free problems remaining }
+              @else if (!svc.userStatsReady()) {
+                <span class="inline-stat-loader"><span class="spinner-sm" aria-hidden="true"></span> Loading stats…</span>
+              }
               @else { {{ svc.user()!.totalSolved }} solved · {{ svc.user()!.accuracy }}% accuracy }
             </div>
             <div class="hero-btns">
@@ -89,12 +92,19 @@ import { AppService } from './app.service';
                 <strong>Best Game:</strong> Most correct in one game.&nbsp;&nbsp;
                 <strong>Longest Run:</strong> Longest consecutive correct run.
               </p>
-              <div class="stats-grid">
-                <div class="sc"><div class="sc-lbl">Total Solved</div><div class="sc-val">{{ svc.user()!.totalSolved }}</div></div>
-                <div class="sc"><div class="sc-lbl">Accuracy</div><div class="sc-val">{{ svc.user()!.accuracy }}%</div></div>
-                <div class="sc"><div class="sc-lbl">Best Game</div><div class="sc-val c-correct">{{ svc.user()!.topSession }}</div></div>
-                <div class="sc"><div class="sc-lbl">Longest Run</div><div class="sc-val c-streak">{{ svc.user()!.bestStreak }}</div></div>
-              </div>
+              @if (!svc.userStatsReady()) {
+                <div class="stats-loading" role="status" aria-live="polite">
+                  <span class="spinner" aria-hidden="true"></span>
+                  <span>Loading your stats…</span>
+                </div>
+              } @else {
+                <div class="stats-grid">
+                  <div class="sc"><div class="sc-lbl">Total Solved</div><div class="sc-val">{{ svc.user()!.totalSolved }}</div></div>
+                  <div class="sc"><div class="sc-lbl">Accuracy</div><div class="sc-val">{{ svc.user()!.accuracy }}%</div></div>
+                  <div class="sc"><div class="sc-lbl">Best Game</div><div class="sc-val c-correct">{{ svc.user()!.topSession }}</div></div>
+                  <div class="sc"><div class="sc-lbl">Longest Run</div><div class="sc-val c-streak">{{ svc.user()!.bestStreak }}</div></div>
+                </div>
+              }
             </div>
           }
         </div>
@@ -146,8 +156,7 @@ export class DashboardComponent {
 
   go(path: string): void {
     if (path === '/login') {
-      // Login is an overlay in AppComponent driven by the signal — not a real route
-      this.svc.currentScreen.set('login');
+      void this.router.navigate(['/login']);
       return;
     }
     this.router.navigate([path]);

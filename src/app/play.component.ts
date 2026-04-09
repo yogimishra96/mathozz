@@ -147,75 +147,6 @@ import { PwaInstallService } from './pwa-install.service';
       </div>
     }
 
-    <!-- ══ RESULT ══ -->
-    @if (svc.currentScreen() === 'result') {
-      <div class="screen shell">
-        <aside class="sidebar">
-          <div class="sb-top"><div class="sb-brand" (click)="go('/dashboard')">Mathozz</div><div class="sb-tagline">Think fast.</div></div>
-          <nav class="sb-nav">
-            <button class="ni" (click)="go('/dashboard')"><i class="fa-solid fa-house"></i><span>Dashboard</span></button>
-            <button class="ni" (click)="startFreshGame()"><i class="fa-solid fa-rotate-right"></i><span>Play Again</span></button>
-          </nav>
-        </aside>
-        <main class="main">
-          <div class="topbar"><div class="tb-logo" (click)="go('/dashboard')">Mathozz</div></div>
-          <div class="result-content">
-            <div class="result-top">
-              <div>
-                <div class="result-eyebrow">Session Complete</div>
-                <div class="result-title">{{ resultLabel() }}</div>
-                <div class="result-sub">
-                  @if (svc.isGuest()) { Create an account to save progress. }
-                  @else { Stats saved to your profile. }
-                </div>
-              </div>
-              <div class="result-big">
-                <div class="result-big-num">{{ svc.sessionCorrect() }}</div>
-                <div class="result-big-lbl">Correct</div>
-              </div>
-            </div>
-
-            <div class="result-stats">
-              <div class="rsc"><div class="rsc-val" style="color:var(--wrong)">{{ svc.sessionWrong() }}</div><div class="rsc-lbl">Wrong</div></div>
-              <div class="rsc"><div class="rsc-val c-skipped">{{ svc.sessionSkipped() }}</div><div class="rsc-lbl">Skipped</div></div>
-              <div class="rsc"><div class="rsc-val c-streak">{{ svc.sessionBestStreak() }}</div><div class="rsc-lbl">Best Streak</div></div>
-              <div class="rsc"><div class="rsc-val">{{ svc.sessionAccuracy() }}<span style="font-size:0.9rem;opacity:0.4;">%</span></div><div class="rsc-lbl">Accuracy</div></div>
-            </div>
-
-            @if (svc.isGuest()) {
-              <div class="result-guest-card">
-                <div class="rgc-body">
-                  <div class="rgc-title">Save your progress</div>
-                  <div class="rgc-sub">Create a free account to track stats.</div>
-                </div>
-                <button class="btn btn-primary" (click)="go('/login')">Sign Up</button>
-              </div>
-            }
-
-            <div class="result-btns">
-              <button class="btn btn-primary btn-lg" (click)="startFreshGame()">
-                <i class="fa-solid fa-rotate-right"></i> Play Again
-              </button>
-              <button class="btn btn-outline btn-lg" (click)="go('/dashboard')">
-                <i class="fa-solid fa-house"></i> Dashboard
-              </button>
-              <button class="btn btn-ghost btn-lg" (click)="openFeedback.set(true)">
-                <i class="fa-regular fa-comment-dots"></i> Feedback
-              </button>
-            </div>
-          </div>
-        </main>
-      </div>
-
-      <nav class="mobile-nav">
-        <div class="mob-nav-inner">
-          <button class="mob-ni" (click)="go('/dashboard')"><i class="fa-solid fa-house"></i><span>Home</span></button>
-          <button class="mob-ni active" (click)="startFreshGame()"><i class="fa-solid fa-rotate-right"></i><span>Play Again</span></button>
-          <button class="mob-ni" (click)="openFeedback.set(true)"><i class="fa-regular fa-comment-dots"></i><span>Feedback</span></button>
-        </div>
-      </nav>
-    }
-
     <!-- ══ Feedback Modal ══ -->
     @if (openFeedback()) {
       <div class="feedback-modal-overlay" (click)="openFeedback.set(false)">
@@ -286,7 +217,7 @@ export class PlayComponent implements OnInit, OnDestroy {
 
   go(path: string): void {
     if (path === '/login') {
-      this.svc.currentScreen.set('login');
+      void this.router.navigate(['/login']);
       return;
     }
     this.router.navigate([path]);
@@ -304,7 +235,9 @@ export class PlayComponent implements OnInit, OnDestroy {
 
   endGame(): void {
     this.svc.stopTimer();
-    this.svc.currentScreen.set('result');
+    this.svc.clearSavedGame();
+    this.svc.currentScreen.set('home');
+    void this.router.navigate(['/dashboard']);
   }
 
   togglePause(): void {
@@ -341,14 +274,6 @@ export class PlayComponent implements OnInit, OnDestroy {
     else if (e.key === 'Delete')            { e.preventDefault(); this.svc.pressClear(); }
     else if (e.key === 'Enter')             { e.preventDefault(); this.svc.submitAnswer(); }
     else if (e.key === 'Escape')            { this.pauseAndGoHome(); }
-  }
-
-  resultLabel(): string {
-    const c = this.svc.sessionCorrect();
-    if (c >= 25) return 'Outstanding.';
-    if (c >= 15) return 'Great Session.';
-    if (c >= 8)  return 'Well Done.';
-    return 'Good Effort.';
   }
 
   closeFeedback(): void {
@@ -393,8 +318,7 @@ export class PlayComponent implements OnInit, OnDestroy {
   }
 }
 
-/** Helper: returns true if game screen is not currently active */
+/** Helper: returns true if we should start a fresh game when opening /play */
 function svc_screen_not_game(svc: AppService): boolean {
-  const s = svc.currentScreen();
-  return s !== 'game' && s !== 'result';
+  return svc.currentScreen() !== 'game';
 }

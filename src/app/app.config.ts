@@ -10,6 +10,7 @@ import { ReportsComponent }   from './reports.component';
 import { DashboardComponent } from './dashboard.component';
 import { ProfileComponent }   from './profile.component';
 import { PlayComponent }      from './play.component';
+import { LoginComponent }     from './login.component';
 
 export const firebaseApp  = initializeApp(environment.firebase);
 export const firebaseAuth = getAuth(firebaseApp);
@@ -26,12 +27,7 @@ export const appConfig: ApplicationConfig = {
       { path: 'dashboard', component: DashboardComponent },
       { path: 'profile',   component: ProfileComponent },
       { path: 'play',      component: PlayComponent },
-
-      // ── Login — handled inside AppComponent via <router-outlet>
-      // We keep /login as an alias that tells AppComponent to show login screen.
-      // Alternatively just navigate to /dashboard and let currentScreen do it.
-      // For simplicity, /login redirects to dashboard where the guest flow takes over.
-      { path: 'login',     redirectTo: 'dashboard', pathMatch: 'full' },
+      { path: 'login',     component: LoginComponent },
 
       // ── Admin ───────────────────────────────────────────────────────────
       { path: 'admin-reports-secret-2024', component: ReportsComponent },

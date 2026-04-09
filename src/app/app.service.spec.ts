@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { vi } from 'vitest';
 import { AppService, calcXP, PROBLEM_TIME } from './app.service';
 
@@ -25,7 +26,9 @@ describe('AppService', () => {
       writable: true,
     });
 
-    TestBed.configureTestingModule({});
+    TestBed.configureTestingModule({
+      providers: [provideRouter([])],
+    });
     service = TestBed.inject(AppService);
   });
 

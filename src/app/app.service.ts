@@ -1,4 +1,5 @@
-import { Injectable, signal, computed } from '@angular/core';
+import { Injectable, inject, signal, computed } from '@angular/core';
+import { Router } from '@angular/router';
 import {
   signInWithPopup,
   GoogleAuthProvider,
@@ -141,12 +142,15 @@ export function calcXP(
 
 @Injectable({ providedIn: 'root' })
 export class AppService {
+  private router = inject(Router);
 
   // ── Navigation ────────────────────────────────────────────────────────────
   currentScreen = signal<Screen>('home');
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   user      = signal<UserData | null>(null);
+  /** False while Firestore user doc is still loading (after auth). */
+  userStatsReady = signal(true);
   isLoading = signal(false);
   authError = signal('');
 
@@ -222,14 +226,18 @@ export class AppService {
         finally { this.isLoading.set(false); }
       } else {
         this.user.set(null);
+        this.userStatsReady.set(true);
       }
     });
   }
 
-  private async onUserLogin(fb: FirebaseUser): Promise<void> {
-    const guest    = this.readGuestData();
-    const existing = await this.fetchUserFromFirestore(fb.uid);
-    const today    = new Date().toISOString().split('T')[0];
+  /** Merge Firestore + guest + Firebase Auth profile into `UserData`. */
+  private mergeUserData(
+    fb: FirebaseUser,
+    guest: GuestData,
+    existing: UserData | null
+  ): UserData {
+    const today = new Date().toISOString().split('T')[0];
     const { dailyStreak } = this.calcDailyStreak(
       existing?.lastPlayedDate ?? '', existing?.dailyStreak ?? 0
     );
@@ -261,11 +269,30 @@ export class AppService {
     const tc = u.totalCorrect;
     u.accuracy = ts > 0 ? Math.round((tc / ts) * 100) : 0;
     u.level    = Math.floor(u.xp / 100) + 1;
+    return u;
+  }
 
-    this.clearGuestData();
-    this.user.set(u);
-    await this.saveUserToFirestore(u);
-    await this.updateLeaderboardEntry();
+  private async onUserLogin(fb: FirebaseUser): Promise<void> {
+    const guest = this.readGuestData();
+    this.userStatsReady.set(false);
+    // Show logged-in shell immediately (Firestore still loading).
+    this.user.set(this.mergeUserData(fb, guest, null));
+
+    try {
+      const existing = await this.fetchUserFromFirestore(fb.uid);
+      const u = this.mergeUserData(fb, guest, existing);
+
+      this.clearGuestData();
+      this.user.set(u);
+      // Show stats as soon as Firestore read + merge is done (same as pre-loader UX).
+      // Saving to Firestore / leaderboard must not block the UI.
+      this.userStatsReady.set(true);
+      await this.saveUserToFirestore(u);
+      await this.updateLeaderboardEntry();
+    } catch (e) {
+      console.error(e);
+      this.userStatsReady.set(true);
+    }
   }
 
   async loginWithGoogle(): Promise<void> {
@@ -306,6 +333,7 @@ export class AppService {
     try {
       await signOut(firebaseAuth);
       this.user.set(null);
+      this.userStatsReady.set(true);
       this.currentScreen.set('home');
     } catch (e) { console.error(e); }
   }
@@ -519,7 +547,11 @@ export class AppService {
     } else {
       this.updateGuest(correct, correct ? calcXP(this.difficulty(), responseMs, this.streak()) : 0);
       if (this.guestSolvedCount() >= GUEST_LIMIT) {
-        setTimeout(() => { this.stopTimer(); this.guestGateTriggered.set(true); this.currentScreen.set('login'); }, 400);
+        setTimeout(() => {
+          this.stopTimer();
+          this.guestGateTriggered.set(true);
+          void this.router.navigate(['/login']);
+        }, 400);
         return;
       }
     }
