@@ -43,7 +43,7 @@ Use this section to orient quickly before editing code. Prefer **small, focused 
 
 ### Firebase
 
-- Collections and fields: see **§ Firestore Collections Reference** below.
+- Collections, fields, auth flow, and SDK call map: see **Low-Level Design** and **§ Firestore Collections Reference** below.
 - Deploy: `firebase deploy` (hosting build output `dist/mathozz/browser` per `firebase.json`).
 
 ### Commands
@@ -75,6 +75,120 @@ npm test           # unit tests (Vitest-powered where configured)
 | Audio | Web Audio API (no library) |
 | Confetti | Canvas API (no library) |
 | PWA | @angular/pwa |
+
+---
+
+## Low-Level Design
+
+This section describes how the app is structured at implementation level: pages, features, where network I/O happens, and how Firebase fits in. There is **no custom REST backend** in this repo; all persistent data goes through the **Firebase Web SDK** (HTTPS to Google). The only non-Firebase HTTP call is **geolocation** via a public IP API.
+
+### System context
+
+```mermaid
+flowchart LR
+  subgraph client [Angular SPA]
+    UI[Standalone components]
+    Svc[AppService signals]
+  end
+  subgraph firebase [Firebase project]
+    Auth[Firebase Auth]
+    FS[Cloud Firestore]
+  end
+  Geo[ipapi.co JSON]
+  UI --> Svc
+  Svc --> Auth
+  Svc --> FS
+  Svc -.->|optional| Geo
+```
+
+### Pages and routing
+
+| Path | Component | Role |
+|------|-----------|------|
+| `''` | *(redirect)* | → `dashboard` |
+| `dashboard` | `DashboardComponent` | Home: hero, guest progress / signed-in stats, resume saved game, nav to play or login |
+| `profile` | `ProfileComponent` | Signed-in user card, stats, badges display, feedback modal, sign out |
+| `play` | `PlayComponent` | Active game UI: timer, numpad, pause/save, end game → dashboard, PWA install, feedback |
+| `login` | `LoginComponent` | Google + email/password sign-in and sign-up; guest gate message when limit hit |
+| `admin-reports-secret-2024` | `ReportsComponent` | Admin-style list of `problem-reports` (search, filter, mark resolved) |
+| `**` | *(redirect)* | → `dashboard` |
+
+**Root shell:** `AppComponent` hosts `<router-outlet />`, theme class on host, and patches `AppService` auth methods to navigate to `/dashboard` after successful login.
+
+### Core modules and responsibilities
+
+| Unit | Responsibility |
+|------|----------------|
+| `AppService` | Single state hub: auth user (`UserData`), game session signals, guest/localStorage, leaderboard fetch, theme, geo fields, Firestore read/write helpers, feedback/problem-report writes |
+| `app.config.ts` | `provideZonelessChangeDetection`, `provideRouter`, `provideServiceWorker`; **Firebase bootstrap**: `initializeApp(environment.firebase)`, `getAuth`, `getFirestore` — exported as `firebaseApp`, `firebaseAuth`, `firebaseDb` |
+| `PwaInstallService` | Prompt / detect installability for the PWA (used from play screen) |
+| `environment*.ts` | Firebase web config (`apiKey`, `authDomain`, `projectId`, etc.) |
+
+### Feature inventory
+
+| Feature | Where it lives | Persistence |
+|---------|----------------|-------------|
+| Mental math session (problems, streak, XP, timer, pause) | `AppService` + `PlayComponent` | Signed-in: Firestore `users` + `leaderboard`; guest: `localStorage` key `mathozz_guest` |
+| Saved game (pause/resume) | `AppService` | `localStorage` `mathozz_saved_game` |
+| Dark / light theme | `AppService` | `localStorage` `mathozz_theme` |
+| Leaderboard (global / country / city) | `AppService.fetchLeaderboard`, UI from dashboard/profile flows | Firestore `leaderboard` collection; scope uses `userCountry` / `userCity` from ip lookup |
+| Auth (Google, email) | `AppService` + `LoginComponent` | Firebase Auth; user profile doc in Firestore |
+| Feedback form | `AppService.submitFeedback` | Firestore `problem-reports` with `type: 'user-feedback'` |
+| Problem / bug reports | `AppService.submitProblemReport`, `getProblemReports`, `markReportResolved` | Firestore `problem-reports` |
+| Admin reports UI | `ReportsComponent` | Reads/updates Firestore via `AppService` |
+
+### Authentication (low level)
+
+1. **`onAuthStateChanged(firebaseAuth, …)`** in `AppService` constructor drives session lifecycle.
+2. **Signed in:** `userStatsReady` → false; optimistic `user` from `mergeUserData(fb, guest, null)`; then **`getDoc(users/{uid})`**; merge with guest progress; **`userStatsReady` → true**; async **`setDoc`** user + **`updateLeaderboardEntry`** (must not block showing merged stats).
+3. **Signed out:** `user` → null, `userStatsReady` → true.
+4. **Methods:** `signInWithPopup` + `GoogleAuthProvider`, `signInWithEmailAndPassword`, `createUserWithEmailAndPassword` + `updateProfile`, `signOut`.
+5. **Guest** = no Firebase user (`user() === null`); after 50 solved problems, app navigates to `/login`.
+
+### Firestore — collections and SDK usage
+
+| Collection | Document ID | Purpose |
+|------------|-------------|---------|
+| `users` | Firebase `uid` | Profile + aggregate stats (accuracy, XP, streaks, geo, badges array, etc.) |
+| `leaderboard` | Firebase `uid` | Denormalized row for ranking (XP, level, accuracy, geo, etc.) |
+| `problem-reports` | Auto-generated | User feedback, bug reports, optional game snapshot |
+
+**Operations map (conceptual “API” — all via modular `firebase/firestore`):**
+
+| Operation | When | Functions used |
+|-----------|------|----------------|
+| Read user | After login | `getDoc(doc(db, 'users', uid))` |
+| Upsert user | After login merge, initial save | `setDoc(..., { merge: true })` with `serverTimestamp()` |
+| Patch user stats | After each answered problem (signed-in only) | `updateDoc` on `users/{uid}` |
+| Upsert leaderboard row | After login and after each stat persist | `setDoc` on `leaderboard/{uid}`, merge |
+| Query leaderboard | User opens leaderboard / changes scope | `query` + `where` + `orderBy('xp','desc')` + `limit(50)` — **composite indexes** required for country/city (see `firestore.indexes.json`) |
+| Create report / feedback | User submits | `setDoc` on new doc in `problem-reports` |
+| List reports (admin) | Reports page | `query` + `orderBy('timestamp','desc')` + `limit(100)` |
+| Mark resolved | Admin action | `updateDoc` on report doc |
+
+**Security rules** (`firestore.rules`): owner-only `users/{userId}`; authenticated read + owner write on `leaderboard/{userId}`; `problem-reports` allows open create and (currently) open read/update for admin testing — tighten for production.
+
+### External HTTP (non-Firebase)
+
+| URL | Method | Used for |
+|-----|--------|----------|
+| `https://ipapi.co/json/` | GET | Country/city for leaderboard scopes (`detectLocation` in `AppService`) |
+
+### “Endpoints” and hosting
+
+- The app does **not** define Express/Cloud Functions routes in this repo.
+- **Firebase Hosting** (`firebase.json`) serves `dist/mathozz/browser`, with **`**` → `/index.html`** for SPA routing. Security headers are set for all paths.
+- **Firestore** and **Auth** are reached through the Firebase client SDK (not manually documented REST paths).
+
+### Integration checklist (Firebase)
+
+| Concern | Location |
+|---------|----------|
+| Web config | `src/environments/environment.ts` (+ prod) |
+| App init | `initializeApp` in `app.config.ts` |
+| Auth + Firestore singletons | `firebaseAuth`, `firebaseDb` exported from `app.config.ts`, imported in `AppService` |
+| Rules + indexes | `firestore.rules`, `firestore.indexes.json` |
+| Deploy | `firebase deploy` (hosting + `firestore` as configured) |
 
 ---
 
@@ -223,6 +337,7 @@ totalCorrect: number
 accuracy: number          // 0–100
 currentStreak: number
 bestStreak: number
+topSession: number       // best "correct in one game" session
 dailyStreak: number
 lastPlayedDate: string    // ISO date "YYYY-MM-DD"
 xp: number
@@ -239,31 +354,44 @@ updatedAt: Timestamp
 ### `leaderboard/{userId}`
 ```
 displayName: string
-photoURL: string
 xp: number
 level: number
 accuracy: number
 bestStreak: number
+topSession: number
 averageResponseMs: number
 country: string
 city: string
 updatedAt: Timestamp
 ```
 
+### `problem-reports/{reportId}`
+```
+// Bug reports and user feedback share this collection.
+// Feedback docs include type: 'user-feedback' plus optional email/phone.
+userId, userEmail, userAgent, description, timestamp, resolved, screen
+// Optional gameState when reported from play screen
+```
+
 ---
 
 ## 7. Game Rules
 
-| Difficulty | Streak Range | Number Range | XP/correct |
-|---|---|---|---|
-| Easy | 0–9 | 1–10 | +10 |
-| Medium | 10–24 | 10–50 | +20 |
-| Hard | 25+ | 50–200 | +35 |
+Difficulty is driven by **current streak** in code (`AppService.difficulty`):
 
-- **Wrong answer**: streak resets to 0, no XP penalty
-- **Time up (15s)**: treated as wrong answer
-- **Guest mode**: 50 free problems, then soft login gate
-- **Guest data** merges additively into Firestore on first login
+| Difficulty | Streak range | Operand ranges (see `buildProblem`) | Base XP (before speed + streak bonuses) |
+|---|---|---|---|
+| Easy | 0–7 | e.g. +/− up to ~20; × small; ÷ clean integers | 10 |
+| Medium | 8–19 | larger operands | 20 |
+| Hard | 20+ | largest operands | 35 |
+
+Per-answer XP uses `calcXP(difficulty, responseMs, streak)` (speed factor and streak bonus — not a flat +10/+20/+35).
+
+- **Wrong answer**: streak resets to 0; no XP for that problem
+- **Time up (15s)** with input: wrong, streak reset, counts as attempt
+- **Time up with no input**: counted as skip (`sessionSkipped`), does not reset streak
+- **Guest mode**: 50 free problems, then navigate to `/login`
+- **Guest data** merges into Firestore on first successful login
 
 ---
 
