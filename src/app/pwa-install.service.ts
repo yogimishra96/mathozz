@@ -25,6 +25,11 @@ export class PwaInstallService {
       this.deferred = e as AnyBeforeInstallPrompt;
       this.canPrompt.set(true);
     });
+
+    window.addEventListener('appinstalled', () => {
+      this.deferred = null;
+      this.canPrompt.set(false);
+    });
   }
 
   isStandalone(): boolean {
@@ -39,14 +44,17 @@ export class PwaInstallService {
    * @returns 'accepted' | 'dismissed' | 'unavailable'
    */
   async promptInstall(): Promise<'accepted' | 'dismissed' | 'unavailable'> {
-    if (!this.deferred) return 'unavailable';
-    await this.deferred.prompt();
-    const { outcome } = await this.deferred.userChoice;
+    const ev = this.deferred;
+    if (!ev) return 'unavailable';
+    // Each event supports at most one `prompt()`; clear before awaiting so we never reuse it.
+    this.deferred = null;
+    await ev.prompt();
+    const { outcome } = await ev.userChoice;
     if (outcome === 'accepted') {
       this.canPrompt.set(false);
-      this.deferred = null;
       return 'accepted';
     }
+    this.canPrompt.set(false);
     return 'dismissed';
   }
 }

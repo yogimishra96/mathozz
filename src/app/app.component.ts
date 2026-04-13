@@ -6,6 +6,7 @@ import {
 import { RouterOutlet, Router } from '@angular/router';
 
 import { AppService } from './app.service';
+import { PwaInstallService } from './pwa-install.service';
 
 /**
  * Shell: global theme + router-outlet. Login lives at `/login` (LoginComponent).
@@ -23,6 +24,8 @@ import { AppService } from './app.service';
 export class AppComponent implements OnInit {
   readonly svc   = inject(AppService);
   private router = inject(Router);
+  /** Eager init so `beforeinstallprompt` is captured on first load, not only after opening /play. */
+  private readonly _pwaInstall = inject(PwaInstallService);
 
   ngOnInit(): void {
     this._patchAuthNavigation();
