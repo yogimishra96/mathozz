@@ -70,9 +70,17 @@ app-root.theme-light {
 
 .game-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  padding: 10px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
+  padding-top: max(10px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
   gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.game-header::-webkit-scrollbar { display: none; }
 .gh-logo {
   font-size: 1rem; font-weight: 700; letter-spacing: -0.03em;
   color: var(--text); text-decoration: none; cursor: pointer; flex-shrink: 0;
@@ -92,7 +100,19 @@ app-root.theme-light {
 .gh-icon-btn.install { color: var(--accent); border-color: rgba(200,232,106,0.3); }
 .gh-icon-btn.install:hover { background: rgba(200,232,106,0.08); }
 
-.gh-stats { display: flex; align-items: center; gap: 14px; }
+.gh-stats {
+  display: flex; align-items: center; gap: 14px;
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: center;
+}
+@media (max-width: 420px) {
+  .gh-stats { gap: 8px; }
+  .ghs-val { font-size: 0.95rem; }
+  .ghs-label { font-size: 0.45rem; }
+  .game-header { gap: 6px; padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(10px, env(safe-area-inset-right)); }
+  .gh-actions { gap: 4px; }
+}
 .ghs-item { display: flex; flex-direction: column; align-items: center; gap: 1px; }
 .ghs-label { font-size: 0.5rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .ghs-val { font-family: 'DM Mono', monospace; font-size: 1.1rem; font-weight: 500; line-height: 1; color: var(--text); }
@@ -411,21 +431,34 @@ app-root.theme-light {
 .form-textarea:focus { border-color: var(--accent); }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-/* Toast */
+/* Toast — inset from edges + wrap so long copy stays on screen (mobile) */
 .toast-wrap {
-  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
-  z-index: 400; pointer-events: none;
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  z-index: 400;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  box-sizing: border-box;
+}
+@keyframes toastIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+.toast {
+  max-width: 100%;
+  min-width: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px;
+  display: flex; align-items: flex-start; gap: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   animation: toastIn 200ms ease both;
 }
-@keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(-10px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
-.toast {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 16px;
-  display: flex; align-items: center; gap: 8px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4); white-space: nowrap;
-}
-.toast i { color: var(--correct); }
-.toast span { font-size: 0.84rem; color: var(--text); }
+.toast i { color: var(--correct); flex-shrink: 0; margin-top: 2px; }
+.toast span { font-size: 0.84rem; color: var(--text); line-height: 1.35; min-width: 0; }
 
 /* ══ RESPONSIVE ══ */
 @media (max-width: 700px) {
