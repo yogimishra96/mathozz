@@ -149,6 +149,8 @@ export class AppService {
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   user      = signal<UserData | null>(null);
+  /** True after the first `onAuthStateChanged` fires (avoids guest UI flash before Firebase resolves session). */
+  authReady = signal(false);
   /** False while Firestore user doc is still loading (after auth). */
   userStatsReady = signal(true);
   isLoading = signal(false);
@@ -219,6 +221,7 @@ export class AppService {
 
   private initAuth(): void {
     onAuthStateChanged(firebaseAuth, async (fb: FirebaseUser | null) => {
+      this.authReady.set(true);
       if (fb) {
         this.isLoading.set(true);
         try { await this.onUserLogin(fb); }
@@ -242,9 +245,12 @@ export class AppService {
       existing?.lastPlayedDate ?? '', existing?.dailyStreak ?? 0
     );
 
+    const authName  = fb.displayName?.trim() ?? '';
+    const storeName = existing?.displayName?.trim() ?? '';
     const u: UserData = {
       uid:          fb.uid,
-      displayName:  existing?.displayName ?? fb.displayName ?? 'Anonymous',
+      // Prefer Firebase Auth profile (email signup / Google); Firestore may still hold stale "Anonymous".
+      displayName:  authName || storeName || 'Anonymous',
       email:        fb.email ?? '',
       photoURL:     fb.photoURL ?? '',
       totalSolved:  (existing?.totalSolved ?? 0) + guest.solved,
@@ -323,6 +329,7 @@ export class AppService {
     try {
       const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
       await updateProfile(cred.user, { displayName });
+      await cred.user.reload();
       this.guestGateTriggered.set(false);
       this.currentScreen.set('home');
     } catch (e) { this.authError.set(this.parseAuthErr(e)); }

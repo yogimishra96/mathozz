@@ -41,7 +41,14 @@ import { AppService } from './app.service';
           </button>
         </div>
 
-        @if (svc.user(); as u) {
+        @if (!svc.authReady()) {
+          <div class="profile-content">
+            <div class="stats-loading" role="status" aria-live="polite">
+              <span class="spinner" aria-hidden="true"></span>
+              <span>Loading profile…</span>
+            </div>
+          </div>
+        } @else if (svc.user(); as u) {
           <div class="profile-content">
             <div class="profile-hero">
               @if (u.photoURL) {
