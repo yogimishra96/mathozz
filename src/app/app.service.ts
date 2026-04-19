@@ -328,12 +328,22 @@ export class AppService {
     this.authError.set('');
     try {
       const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+      
+      // ✅ Pehle profile update karo
       await updateProfile(cred.user, { displayName });
       await cred.user.reload();
+      
+      // ✅ Ab manually onUserLogin call karo fresh user ke saath
+      // (onAuthStateChanged jo pehle fire hua tha woh stale tha)
+      await this.onUserLogin(cred.user);
+      
       this.guestGateTriggered.set(false);
       this.currentScreen.set('home');
-    } catch (e) { this.authError.set(this.parseAuthErr(e)); }
-    finally { this.isLoading.set(false); }
+    } catch (e) { 
+      this.authError.set(this.parseAuthErr(e)); 
+    } finally { 
+      this.isLoading.set(false); 
+    }
   }
 
   async logout(): Promise<void> {
