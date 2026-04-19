@@ -1,5 +1,7 @@
 export const environment = {
   production: false,
+  /** Set true locally to send hits to GA4 while developing. */
+  enableAnalytics: false,
   firebase: {
     apiKey: "AIzaSyCoqu4ydX2tkI0RReY4zM2FLdWoteUwosM",
     authDomain: "mathozz.firebaseapp.com",

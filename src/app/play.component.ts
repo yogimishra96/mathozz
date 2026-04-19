@@ -1,9 +1,10 @@
 import {
-  Component, inject, signal,
+  Component, effect, inject, signal,
   ChangeDetectionStrategy, OnInit, OnDestroy,
 } from '@angular/core';
 import { Router } from '@angular/router';
 import { AppService } from './app.service';
+import { GoogleAnalyticsService } from './google-analytics.service';
 import { PwaInstallService } from './pwa-install.service';
 
 @Component({
@@ -186,6 +187,7 @@ export class PlayComponent implements OnInit, OnDestroy {
   readonly svc   = inject(AppService);
   readonly pwa   = inject(PwaInstallService);
   private router = inject(Router);
+  private ga     = inject(GoogleAnalyticsService);
   readonly Math  = Math;
 
   readonly numpadKeys = ['1','2','3','4','5','6','7','8','9','CLR','0','⌫'];
@@ -200,6 +202,13 @@ export class PlayComponent implements OnInit, OnDestroy {
 
   private boundKeydown = this.onKeydown.bind(this);
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    effect(() => {
+      const screen = this.svc.currentScreen();
+      this.ga.trackPageView(`/play/${screen}`);
+    });
+  }
 
   ngOnInit(): void {
     document.addEventListener('keydown', this.boundKeydown, true);

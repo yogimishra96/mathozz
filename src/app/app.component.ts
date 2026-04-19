@@ -6,6 +6,7 @@ import {
 import { RouterOutlet, Router } from '@angular/router';
 
 import { AppService } from './app.service';
+import { GoogleAnalyticsService } from './google-analytics.service';
 import { PwaInstallService } from './pwa-install.service';
 
 /**
@@ -26,6 +27,8 @@ export class AppComponent implements OnInit {
   private router = inject(Router);
   /** Eager init so `beforeinstallprompt` is captured on first load, not only after opening /play. */
   private readonly _pwaInstall = inject(PwaInstallService);
+  /** Eager init: GA4 route + User-ID when enabled in environment. */
+  private readonly _analytics = inject(GoogleAnalyticsService);
 
   ngOnInit(): void {
     this._patchAuthNavigation();

@@ -3,6 +3,7 @@ import { provideRouter } from '@angular/router';
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getAnalytics } from 'firebase/analytics'; // ✅ Line 1: import add karo
 import { environment } from '../environments/environment';
 import { provideServiceWorker } from '@angular/service-worker';
 
@@ -15,6 +16,7 @@ import { LoginComponent }     from './login.component';
 export const firebaseApp  = initializeApp(environment.firebase);
 export const firebaseAuth = getAuth(firebaseApp);
 export const firebaseDb   = getFirestore(firebaseApp);
+export const firebaseAnalytics = getAnalytics(firebaseApp); // ✅ Line 2: initialize karo
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -30,7 +32,7 @@ export const appConfig: ApplicationConfig = {
       { path: 'login',     component: LoginComponent },
 
       // ── Admin ───────────────────────────────────────────────────────────
-      { path: 'admin-reports-secret-2024', component: ReportsComponent },
+      { path: 'feedback-report', component: ReportsComponent },
 
       // ── Fallback ────────────────────────────────────────────────────────
       { path: '**', redirectTo: 'dashboard' },
